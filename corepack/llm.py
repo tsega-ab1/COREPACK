@@ -94,7 +94,7 @@ def run(args) -> int:
     rpc = f"{host}:{args.rpc_port or cfg['rpc_port']}"
     ui.ok(f"Model: {model}")
     ui.ok(f"RPC worker: {rpc}")
-    cmd = [str(exe), "-m", model, "--rpc", rpc, "-ngl", "99", "-n", str(args.tokens),
+    cmd = [str(exe), "-m", model, "--rpc", rpc, "-ngl", str(args.ngl), "-n", str(args.tokens),
            "-p", args.prompt]
     help_txt = subprocess.run([str(exe), "--help"], capture_output=True, text=True).stdout
     if "-no-cnv" in help_txt:

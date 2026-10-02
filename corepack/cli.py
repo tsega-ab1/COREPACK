@@ -111,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--prompt", default="Explain what a smartphone cover supercomputer is in two sentences.")
     r.add_argument("--tokens", type=int, default=128)
     r.add_argument("--rpc-port", type=int)
+    r.add_argument("--ngl", type=int, default=99,
+                   help="layers sent to the phone; the rest stay on this device")
 
     c = sub.add_parser("config", help="show or change settings")
     c.add_argument("kv", nargs="*", help="key value")
