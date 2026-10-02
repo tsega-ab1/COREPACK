@@ -67,6 +67,7 @@ class WorkerTests(unittest.TestCase):
             self.assertGreater(p.download(2), 0)
         finally:
             srv.shutdown()
+            srv.server_close()
             pool.close()
 
 
