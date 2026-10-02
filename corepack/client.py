@@ -26,7 +26,10 @@ class Peer:
 
     @property
     def name(self) -> str:
-        return self.meta.get("hostname", self.host)
+        h = self.meta.get("hostname", "")
+        if h in ("", "localhost"):
+            return f"{self.meta.get('role', 'worker')}@{self.host}"
+        return h
 
     @property
     def slots(self) -> int:

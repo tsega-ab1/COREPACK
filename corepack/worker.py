@@ -78,6 +78,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {
                 "service": "corepack", "version": __version__,
                 "hostname": socket.gethostname(), "platform": platform.platform(),
+                "role": config.role(),
                 "cores": self.server.pool.workers, "pool": self.server.pool.kind,
                 "ram_mb": _ram_mb(), "tasks": list(tasks.TASKS)})
         if u.path == "/download":
