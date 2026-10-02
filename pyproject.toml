@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "corepack"
+version = "0.1.0"
+description = "COREPACK Phase 0 - distributed compute between a phone and a PC over USB"
+requires-python = ">=3.8"
+dependencies = []          # stdlib only: installs anywhere, including Termux
+
+[project.scripts]
+corepack = "corepack.cli:main"
+
+[tool.setuptools]
+packages = ["corepack"]

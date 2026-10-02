@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Launcher: works from the repo, or via a symlink on PATH (see install.sh).
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  DIR="$(cd -P "$(dirname "$SRC")" && pwd)"
+  SRC="$(readlink "$SRC")"
+  [[ "$SRC" != /* ]] && SRC="$DIR/$SRC"
+done
+ROOT="$(cd -P "$(dirname "$SRC")/.." && pwd)"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m corepack "$@"
