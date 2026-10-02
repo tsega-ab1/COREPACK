@@ -1,0 +1,25 @@
+{
+  "when": "2026-10-03 00:55:58",
+  "local_cores": 2,
+  "workers": [
+    {
+      "name": "localhost",
+      "cores": 8,
+      "platform": "Android-16-aarch64-64bit-ELF"
+    }
+  ],
+  "runs": [
+    {
+      "task": "primes",
+      "size": "large",
+      "local_s": 546.391,
+      "both_s": 269.453,
+      "speedup": 2.028,
+      "identical": true,
+      "chunks": {
+        "this device": 20,
+        "localhost": 28
+      }
+    }
+  ]
+}
