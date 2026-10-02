@@ -12,9 +12,15 @@ from pathlib import Path
 from . import config, peers as peers_mod, ui
 
 
-def _bin(cfg: dict, name: str) -> Path | None:
-    p = config.expand(cfg["llama_cpp_dir"]) / "build" / "bin" / name
-    return p if p.exists() else None
+RPC_NAMES = ("rpc-server", "ggml-rpc-server", "llama-rpc-server")  # renamed across versions
+
+
+def _bin(cfg: dict, *names: str) -> Path | None:
+    base = config.expand(cfg["llama_cpp_dir"]) / "build" / "bin"
+    for n in names:
+        if (base / n).exists():
+            return base / n
+    return None
 
 
 def _find_model(cfg: dict) -> str | None:
@@ -59,7 +65,7 @@ def build(args) -> int:
 
 def serve(args) -> int:
     cfg = config.load()
-    exe = _bin(cfg, "rpc-server")
+    exe = _bin(cfg, *RPC_NAMES)
     ui.header("llama.cpp RPC server (run this on the phone)")
     if not exe:
         ui.fail("rpc-server not found. Run:  corepack llm build")

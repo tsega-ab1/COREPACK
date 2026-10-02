@@ -39,12 +39,15 @@ def run(args=None) -> int:
         ui.hint("Use a data cable (not charge-only), then run `corepack ip` again.")
 
     print()
-    llama = config.expand(cfg["llama_cpp_dir"]) / "build" / "bin"
-    for b in ("llama-cli", "rpc-server"):
-        if (llama / b).exists():
-            ui.ok(f"llama.cpp {b}")
-        else:
-            ui.warn(f"llama.cpp {b} not built (only needed for LLM mode: corepack llm build)")
+    from . import llm
+    wanted = "llama-cli" if config.role() == "pc" else "rpc"
+    for key, label, names in (("llama-cli", "llama-cli", ("llama-cli",)),
+                              ("rpc", "rpc server", llm.RPC_NAMES)):
+        found = llm._bin(cfg, *names)
+        if found:
+            ui.ok(f"llama.cpp {found.name}")
+        elif key == wanted:
+            ui.warn(f"llama.cpp {label} not built (needed for LLM mode: corepack llm build)")
 
     print()
     ui.info("Saved settings: " + str(config.path()))
