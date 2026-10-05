@@ -13,28 +13,12 @@ no pip installs, same code on both devices.
    8 phone cores  ──── one shared queue of chunks ────  PC cores
 ```
 
-## 1. Get it on both devices
-
-```bash
-# once, from your PC, in this folder
-git init && git add . && git commit -m "COREPACK phase 0"
-git remote add origin <your-repo-url> && git push -u origin main
-
-# on BOTH the PC and the phone (Termux)
-git clone <your-repo-url> ~/COREPACK
-cd ~/COREPACK && ./install.sh
-corepack            # opens the menu
-```
-
-Update later with `git pull`. Nothing else to reinstall.
-
-## 2. Run the experiment
+## 1. Run the experiment
 
 1. **Phone:** Settings → Connections → Mobile Hotspot and Tethering → **USB tethering ON**
    (cable plugged into the PC). In Termux: `termux-wake-lock`, then `corepack worker`.
 2. **PC:** `corepack doctor` → `corepack ip` (shows the phone's address) → `corepack net`
    (link speed) → `corepack bench`.
-3. Commit the saved result: `git add results && git commit -m "bench" && git push`.
 
 Success = the **"local + worker"** row is faster than **"local only"**, with identical results.
 
