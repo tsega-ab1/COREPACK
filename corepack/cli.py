@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__, bench, config, doctor, llm, netinfo, nettest, tasks, ui, worker
+from . import __version__, bench, config, doctor, gateway, llm, netinfo, nettest, tasks, ui, worker
 
 
 def cmd_ip(args) -> int:
@@ -111,8 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--prompt", default="Explain what a smartphone cover supercomputer is in two sentences.")
     r.add_argument("--tokens", type=int, default=128)
     r.add_argument("--rpc-port", type=int)
-    r.add_argument("--ngl", type=int, default=99,
-                   help="layers sent to the phone; the rest stay on this device")
+
+    gateway.add_parsers(sub)
 
     c = sub.add_parser("config", help="show or change settings")
     c.add_argument("kv", nargs="*", help="key value")
@@ -134,6 +134,8 @@ def dispatch(args, parser) -> int:
         return bench.run(args)
     if args.cmd == "config":
         return cmd_config(args)
+    if args.cmd == "gateway":
+        return gateway.dispatch(args, parser)
     if args.cmd == "llm":
         fn = {"build": llm.build, "serve": llm.serve, "run": llm.run}.get(args.llm_cmd)
         if not fn:
@@ -156,6 +158,7 @@ def interactive(parser) -> int:
             ("6", "Benchmark: PC alone vs PC + phone" + ("" if phone else f" {star}"), ""),
             ("7", "LLM across both devices", "llama.cpp RPC"),
             ("8", "Settings", ""),
+            ("9", "Phone AI gateway", "API keys + overlay app"),
             ("0", "Quit", ""),
         ])
         argv = {"1": ["doctor"], "2": ["ip"], "3": ["worker"], "4": ["discover"],
@@ -169,6 +172,13 @@ def interactive(parser) -> int:
                 ("3", "PC: run a prompt", ""),
             ])
             argv = {"1": ["llm", "build"], "2": ["llm", "serve"], "3": ["llm", "run"]}.get(sub)
+        if choice == "9":
+            sub = ui.menu("Phone AI gateway", [
+                ("1", "Set up API key + model", "once"),
+                ("2", "Start the gateway", "leave it running"),
+                ("3", "Test the API key", ""),
+            ])
+            argv = {"1": ["gateway", "init"], "2": ["gateway", "start"], "3": ["gateway", "test"]}.get(sub)
         if argv is None:
             ui.warn("Pick a number from the menu")
             continue
