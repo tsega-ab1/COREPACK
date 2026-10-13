@@ -2,6 +2,7 @@ package com.corepack.pet
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
@@ -13,27 +14,32 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-/** A bottom-sheet style chat that opens over whatever app is underneath. */
+/**
+ * A bottom-sheet style chat that opens over whatever app is underneath.
+ *
+ * The message list ([ChatStore]) is updated on the worker thread, so a reply keeps being recorded
+ * even if the sheet is dismissed mid-answer. Views are only touched on the UI thread.
+ */
 class ChatActivity : Activity() {
     companion object {
         @Volatile
         var visible = false
     }
 
+    private lateinit var title: TextView
     private lateinit var scroll: ScrollView
     private lateinit var list: LinearLayout
     private lateinit var input: EditText
     private lateinit var action: Button
 
-    private var handle: EngineClient.Handle? = null
+    private val views = HashMap<ChatStore.Msg, TextView>()
 
     @Volatile
-    private var busy = false
-    private var liveMsg: ChatStore.Msg? = null
-    private var liveView: TextView? = null
-    private var gotFirst = false
+    private var live: ChatStore.Msg? = null
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun ui(block: () -> Unit) = runOnUiThread { if (!isDestroyed) block() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,7 +49,7 @@ class ChatActivity : Activity() {
             setPadding(dp(12), dp(12), dp(12), dp(12))
             setBackgroundColor(Color.WHITE)
         }
-        val title = TextView(this).apply {
+        title = TextView(this).apply {
             text = "Chat"
             textSize = 16f
             setTextColor(0xFF26215C.toInt())
@@ -57,7 +63,7 @@ class ChatActivity : Activity() {
             setHintTextColor(0xFF888780.toInt())
         }
         action = Button(this).apply {
-            text = "Send"
+            text = if (PetAgent.busy) "Stop" else "Send"
             setOnClickListener { onAction() }
         }
         val row = LinearLayout(this).apply {
@@ -76,7 +82,7 @@ class ChatActivity : Activity() {
         )
         window.setGravity(Gravity.BOTTOM)
 
-        for (m in ChatStore.snapshot()) addBubble(m)
+        for (m in ChatStore.snapshot()) render(m)
     }
 
     override fun onStart() {
@@ -89,117 +95,129 @@ class ChatActivity : Activity() {
         super.onStop()
     }
 
+    /** UI thread only: show or update the bubble for [m]. */
+    private fun render(m: ChatStore.Msg) {
+        val existing = views[m]
+        if (existing != null) {
+            existing.text = m.text
+        } else {
+            views[m] = addBubble(m)
+        }
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    /** UI thread only. */
+    private fun unrender(m: ChatStore.Msg) {
+        views.remove(m)?.let { list.removeView(it) }
+    }
+
     private fun addBubble(m: ChatStore.Msg): TextView {
+        val isNote = m.role == "tool"
         val tv = TextView(this).apply {
             text = m.text
-            textSize = 15f
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            val bg = GradientDrawable()
-            bg.cornerRadius = dp(14).toFloat()
-            when (m.role) {
-                "user" -> {
-                    bg.setColor(0xFFCECBF6.toInt())
-                    setTextColor(0xFF26215C.toInt())
+            if (isNote) {
+                textSize = 12f
+                setTextColor(0xFF888780.toInt())
+                setTypeface(typeface, Typeface.ITALIC)
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+            } else {
+                textSize = 15f
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                val bg = GradientDrawable()
+                bg.cornerRadius = dp(14).toFloat()
+                when (m.role) {
+                    "user" -> {
+                        bg.setColor(0xFFCECBF6.toInt())
+                        setTextColor(0xFF26215C.toInt())
+                    }
+                    "error" -> {
+                        bg.setColor(0xFFFCEBEB.toInt())
+                        setTextColor(0xFF791F1F.toInt())
+                    }
+                    else -> {
+                        bg.setColor(0xFFF1EFE8.toInt())
+                        setTextColor(0xFF2C2C2A.toInt())
+                    }
                 }
-                "error" -> {
-                    bg.setColor(0xFFFCEBEB.toInt())
-                    setTextColor(0xFF791F1F.toInt())
-                }
-                else -> {
-                    bg.setColor(0xFFF1EFE8.toInt())
-                    setTextColor(0xFF2C2C2A.toInt())
-                }
+                background = bg
             }
-            background = bg
             maxWidth = (resources.displayMetrics.widthPixels * 0.8f).toInt()
         }
         val lp = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        lp.topMargin = dp(6)
+        lp.topMargin = dp(if (isNote) 2 else 6)
         lp.gravity = if (m.role == "user") Gravity.END else Gravity.START
         list.addView(tv, lp)
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
         return tv
     }
 
     private fun onAction() {
-        if (busy) {
-            handle?.cancel()
+        if (PetAgent.busy) {
+            PetAgent.cancel()
             return
         }
         val text = input.text.toString().trim()
         if (text.isEmpty()) return
         input.setText("")
-        addBubble(ChatStore.add("user", text))
-        val reply = ChatStore.add("assistant", "")
-        liveMsg = reply
-        liveView = addBubble(reply)
-        gotFirst = false
-        busy = true
+        render(ChatStore.add("user", text))
+        live = null
         action.text = "Stop"
+        title.text = "Chat - thinking..."
         PetBus.set(Phase.THINKING)
-        handle = EngineClient.stream(this, ChatStore.forRequest(), listener)
+        PetAgent.send(this, text, agentListener)
     }
 
     private fun finishTurn() {
-        busy = false
-        runOnUiThread { if (!isDestroyed) action.text = "Send" }
+        ui {
+            action.text = "Send"
+            title.text = "Chat"
+        }
     }
 
-    private val listener = object : EngineClient.Listener {
-        override fun onEvent(name: String) {
-            when (name) {
-                "queued" -> PetBus.set(Phase.QUEUED)
-                "upstream_start" -> PetBus.set(Phase.THINKING)
-                "throttle" -> PetBus.set(Phase.THROTTLED)
+    // Callbacks arrive on the worker thread.
+    private val agentListener = object : PetAgent.UiListener {
+        override fun onTool(name: String) {
+            val current = live
+            live = null
+            if (current != null && current.text.isEmpty()) {
+                ChatStore.remove(current)
+                ui { unrender(current) }
+            }
+            val note = ChatStore.add("tool", "used $name")
+            ui {
+                title.text = "Chat - using $name..."
+                render(note)
             }
         }
 
         override fun onToken(text: String) {
-            val m = liveMsg ?: return
+            val m = live ?: ChatStore.add("assistant", "").also { live = it }
             m.text = m.text + text
-            if (!gotFirst) {
-                gotFirst = true
-                PetBus.set(Phase.TALKING)
-            }
-            val snapshot = m.text
-            runOnUiThread {
-                if (!isDestroyed) {
-                    liveView?.text = snapshot
-                    scroll.fullScroll(View.FOCUS_DOWN)
-                }
+            ui {
+                title.text = "Chat"
+                render(m)
             }
         }
 
-        override fun onDone() {
-            val m = liveMsg
-            if (m != null && m.text.isEmpty()) {
-                m.text = "(no reply)"
-                runOnUiThread { if (!isDestroyed) liveView?.text = m.text }
+        override fun onDone(text: String) {
+            if (live == null && text.isNotEmpty()) {
+                val m = ChatStore.add("assistant", text)
+                ui { render(m) }
             }
-            PetBus.setThenIdle(Phase.SETTLE, 1800)
+            live = null
             finishTurn()
         }
 
         override fun onError(message: String, unreachable: Boolean) {
-            if (unreachable) PetBus.set(Phase.OFFLINE) else PetBus.setThenIdle(Phase.ERROR, 3000)
-            val live = liveMsg
-            val emptyLive = live != null && live.text.isEmpty()
-            if (live != null && emptyLive) ChatStore.remove(live)
-            val shown = if (unreachable) {
-                "Can't reach the gateway. Is it running on the PC with the phone plugged in?"
-            } else {
-                message
+            val current = live
+            live = null
+            if (current != null && current.text.isEmpty()) {
+                ChatStore.remove(current)
+                ui { unrender(current) }
             }
-            val err = ChatStore.add("error", shown)
-            runOnUiThread {
-                if (!isDestroyed) {
-                    val v = liveView
-                    if (emptyLive && v != null) list.removeView(v)
-                    addBubble(err)
-                }
-            }
+            val err = ChatStore.add("error", message)
+            ui { render(err) }
             finishTurn()
         }
     }

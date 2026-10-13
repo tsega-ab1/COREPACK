@@ -2,6 +2,7 @@ package com.corepack.pet
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -90,6 +91,16 @@ class MainActivity : Activity() {
         col.addView(button("Stop the pet") {
             startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
             status.text = "Pet stopped."
+        })
+        col.addView(button("What the pet remembers") {
+            val facts = PetAgent.facts(this).all()
+            val text = if (facts.isEmpty()) "Nothing saved yet." else facts.joinToString("\n") { "- $it" }
+            AlertDialog.Builder(this)
+                .setTitle("Memory")
+                .setMessage(text)
+                .setPositiveButton("Close", null)
+                .setNegativeButton("Forget everything") { _, _ -> PetAgent.facts(this).clear() }
+                .show()
         })
         col.addView(button("Open chat here") {
             startActivity(Intent(this, ChatActivity::class.java))
