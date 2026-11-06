@@ -16,15 +16,18 @@ from __future__ import annotations
 import argparse
 import getpass
 import hmac
+import ipaddress
 import json
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,6 +56,7 @@ DEFAULTS = {
     "max_tokens": 1024,       # cap on reply length
     "timeout": 180,           # seconds to wait on the upstream engine
     "system_prompt": "",      # optional default persona if the client sends none
+    "fallbacks": [],          # backup engines, tried in order if the main one fails or is rate-limited
 }
 
 ALLOWED = {"messages", "temperature", "top_p", "max_tokens", "max_completion_tokens", "stop",
@@ -168,14 +172,28 @@ class Gateway:
         self.token = cfg["token"]
         self.limiter = RateLimiter(int(cfg["rpm"]))
         self.verbose = verbose
+        self.cooling: dict[int, float] = {}     # provider index -> time until which to avoid it
+        self.last_provider = ""
 
     def log(self, msg: str) -> None:
         if self.verbose:
             print(f"  {time.strftime('%H:%M:%S')}  {msg}", file=sys.stderr, flush=True)
 
     def redact(self, s: str) -> str:
-        key = self.cfg.get("api_key")
-        return s.replace(key, "***") if key else s
+        for key in [self.cfg.get("api_key")] + [f.get("api_key") for f in self.cfg.get("fallbacks") or [] if isinstance(f, dict)]:
+            if key:
+                s = s.replace(key, "***")
+        return s
+
+    def providers(self) -> list[dict]:
+        """The main engine first, then each backup engine."""
+        c = self.cfg
+        out = [{"label": c.get("provider") or "main", "base_url": c["base_url"], "api_key": c.get("api_key", ""), "model": c["model"]}]
+        for f in c.get("fallbacks") or []:
+            if isinstance(f, dict) and f.get("base_url") and f.get("model"):
+                out.append({"label": f.get("provider") or "backup", "base_url": f["base_url"],
+                            "api_key": f.get("api_key", ""), "model": f["model"]})
+        return out
 
     def build_payload(self, body: dict) -> dict:
         payload = {k: v for k, v in body.items() if k in ALLOWED}
@@ -191,39 +209,65 @@ class Gateway:
             payload["messages"] = [{"role": "system", "content": sp}] + msgs
         return payload
 
-    def open_upstream(self, payload: dict):
+    def open_upstream(self, payload: dict, prov: dict | None = None):
+        prov = prov or self.providers()[0]
+        payload = dict(payload)
+        payload["model"] = prov["model"]
         headers = {"Content-Type": "application/json",
                    "Accept": "text/event-stream" if payload.get("stream") else "application/json"}
-        if self.cfg.get("api_key"):
-            headers["Authorization"] = "Bearer " + self.cfg["api_key"]
-        url = self.cfg["base_url"].rstrip("/") + "/chat/completions"
+        if prov.get("api_key"):
+            headers["Authorization"] = "Bearer " + prov["api_key"]
+        url = prov["base_url"].rstrip("/") + "/chat/completions"
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
         return urllib.request.urlopen(req, timeout=float(self.cfg["timeout"]))
 
-    def call_upstream(self, payload: dict, on_throttle=None):
-        """Returns (response, None) or (None, (status, message, type))."""
+    def _call_one(self, payload: dict, prov: dict, on_throttle=None, can_wait: bool = True):
+        """One engine. Returns (response, None) or (None, (status, message, type, retry_after_or_None))."""
         for attempt in (0, 1):
             try:
-                return self.open_upstream(payload), None
+                return self.open_upstream(payload, prov), None
             except urllib.error.HTTPError as e:
                 text = e.read()[:4000].decode("utf-8", "replace")
-                if e.code == 429 and attempt == 0:
-                    ra = _retry_after(e.headers)
-                    if on_throttle:
-                        on_throttle(ra)
-                    if ra <= float(self.cfg["max_wait"]):
-                        time.sleep(ra)
-                        if self.limiter.acquire(float(self.cfg["max_wait"])):
-                            continue
                 if e.code == 429:
-                    return None, (429, "The engine is rate-limiting this key: " + _short(text), "rate_limited")
+                    ra = _retry_after(e.headers)
+                    if can_wait and attempt == 0:
+                        if on_throttle:
+                            on_throttle(ra)
+                        if ra <= float(self.cfg["max_wait"]):
+                            time.sleep(ra)
+                            if self.limiter.acquire(float(self.cfg["max_wait"])):
+                                continue
+                    return None, (429, "The engine is rate-limiting this key: " + _short(text), "rate_limited", ra)
                 if e.code in (401, 403):
-                    return None, (502, "The engine rejected the API key", "upstream_auth")
+                    return None, (502, "The engine rejected the API key", "upstream_auth", None)
                 status = 400 if e.code == 400 else 502
-                return None, (status, f"Engine error {e.code}: {_short(text)}", "upstream_error")
+                return None, (status, f"Engine error {e.code}: {_short(text)}", "upstream_error", None)
             except (urllib.error.URLError, OSError) as e:
-                return None, (502, f"Can't reach the engine: {getattr(e, 'reason', e)}", "upstream_unreachable")
-        return None, (502, "Engine unavailable", "upstream_error")
+                return None, (502, f"Can't reach the engine: {getattr(e, 'reason', e)}", "upstream_unreachable", None)
+        return None, (502, "Engine unavailable", "upstream_error", None)
+
+    def call_upstream(self, payload: dict, on_throttle=None, on_fallback=None):
+        """Tries the main engine, then each backup. Returns (response, None) or (None, (status, message, type))."""
+        provs = self.providers()
+        now = time.monotonic()
+        order = [i for i in range(len(provs)) if self.cooling.get(i, 0) <= now]
+        order += [i for i in range(len(provs)) if i not in order]          # last resort: engines that are cooling down
+        first_err = None
+        for pos, i in enumerate(order):
+            prov = provs[i]
+            if i != 0 and on_fallback:
+                on_fallback(prov["label"])
+            more = pos + 1 < len(order)
+            # Sitting out a Retry-After only makes sense with a single engine; with backups, fail over or fail fast.
+            resp, err = self._call_one(payload, prov, on_throttle, can_wait=len(order) == 1)
+            if err is None:
+                self.last_provider = prov["label"]
+                return resp, None
+            if err[3] is not None:
+                self.cooling[i] = time.monotonic() + min(max(err[3], 5.0), 120.0)
+            self.log(f"{prov['label']} failed: {err[1]}" + (" -> trying the next engine" if more else ""))
+            first_err = first_err or err
+        return None, first_err[:3]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -328,7 +372,8 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 return self._sse_error(429, "Too many requests, try again shortly", "rate_limited")
             self._event("upstream_start")
-            resp, err = gw.call_upstream(payload, on_throttle=lambda ra: self._event("throttle", retry_after=ra))
+            resp, err = gw.call_upstream(payload, on_throttle=lambda ra: self._event("throttle", retry_after=ra),
+                                         on_fallback=lambda label: self._event("fallback", provider=label))
             if err:
                 return self._sse_error(*err)
             saw_done = False
@@ -373,6 +418,56 @@ def _pick_models(provider: str, ids: list[str]) -> list[str]:
     return ids[:20]
 
 
+def pairing_uri(base_url: str, token: str) -> str:
+    """One line the phone app can read to fill in the address and token: corepack://pair?url=...&token=..."""
+    return "corepack://pair?url=" + urllib.parse.quote(base_url, safe="") + "&token=" + urllib.parse.quote(token, safe="")
+
+
+def lan_addresses() -> list[str]:
+    """This PC's private IPv4 addresses (Wi-Fi, hotspot, USB tethering), most likely first."""
+    found: list[str] = []
+    try:
+        found += subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        found.insert(0, s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    out: list[str] = []
+    for ip in found:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if a.version == 4 and a.is_private and not a.is_loopback and not a.is_link_local and ip not in out:
+            out.append(ip)
+    return out
+
+
+def parse_adb_devices(out: str) -> list[str]:
+    """Serials of phones that are connected and authorised."""
+    return _adb_serials(out, "device")
+
+
+def parse_adb_unauthorized(out: str) -> list[str]:
+    return _adb_serials(out, "unauthorized")
+
+
+def _adb_serials(out: str, state: str) -> list[str]:
+    """Reads 'serial  state ...' lines, so both `adb devices` and `adb devices -l` work."""
+    rows = [ln.split() for ln in out.splitlines()[1:] if ln.strip()]
+    return [r[0] for r in rows if len(r) >= 2 and r[1] == state]
+
+
+def parse_adb_reverse(out: str, port: int) -> bool:
+    """True if `adb reverse --list` shows tcp:<port> forwarded."""
+    return any(f"tcp:{port}" in ln.split() for ln in out.splitlines())
+
+
 def adb_reverse(port: int) -> tuple[bool, str]:
     adb = shutil.which("adb")
     if not adb:
@@ -381,7 +476,7 @@ def adb_reverse(port: int) -> tuple[bool, str]:
         out = subprocess.run([adb, "devices"], capture_output=True, text=True, timeout=15).stdout
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"adb failed: {e}"
-    devs = [ln.split()[0] for ln in out.splitlines()[1:] if ln.strip().endswith("device")]
+    devs = parse_adb_devices(out)
     if not devs:
         return False, "no phone found over USB (enable USB debugging and accept the prompt on the phone)"
     cmd = [adb, "-s", devs[0], "reverse", f"tcp:{port}", f"tcp:{port}"]
@@ -448,6 +543,171 @@ def cmd_init(args) -> int:
     return 0
 
 
+def _pick_model(prov: str, base: str, key: str, current: str = "") -> str:
+    ui.info("Asking the engine which models you can use...")
+    ids = _pick_models(prov, list_models(base, key))
+    if ids:
+        for i, m in enumerate(ids, 1):
+            print(f"   {i:>2}. {m}")
+        ans = ui.ask("Pick a number, or type a model name", "1")
+        model = ids[int(ans) - 1] if ans.isdigit() and 1 <= int(ans) <= len(ids) else ans
+    else:
+        ui.warn("Couldn't list models (bad key or no network?). Type one yourself.")
+        model = ui.ask("Model name", current)
+    return model.removeprefix("models/") if prov == "gemini" else model
+
+
+def cmd_fallback(args) -> int:
+    cfg = load_file()
+    cmd = args.fb_cmd
+    items = cfg.get("fallbacks") or []
+    if cmd == "list" or cmd is None:
+        if not items:
+            ui.info("No backup engines. Add one with: corepack gateway fallback add")
+        for i, f in enumerate(items, 1):
+            print(f"   {i}. {f.get('provider', '?')}  {f.get('model', '?')}  {f.get('base_url', '?')}  key: {'set' if f.get('api_key') else 'none'}")
+        return 0
+    if cmd == "clear":
+        cfg["fallbacks"] = []
+        save(cfg)
+        ui.ok("Backup engines removed")
+        return 0
+    prov = args.provider or {"1": "gemini", "2": "xai", "3": "local", "4": "custom"}.get(ui.menu("Backup engine", [
+        ("1", "Google Gemini", "another key or model"), ("2", "xAI Grok", "API key or credits"),
+        ("3", "Local server", "llama.cpp or Ollama on this PC (works offline)"), ("4", "Other OpenAI-compatible", "any base URL")]))
+    if prov not in PRESETS:
+        ui.fail("Pick 1-4")
+        return 1
+    preset = PRESETS[prov]
+    base = args.base_url or ui.ask("Base URL", preset["base_url"])
+    key = ""
+    if preset["needs_key"]:
+        key = os.environ.get(args.api_key_env, "") if args.api_key_env else getpass.getpass("  API key (hidden): ").strip()
+        if not key:
+            ui.fail("An API key is required for this engine")
+            return 1
+    model = (args.model or _pick_model(prov, base, key)).strip()
+    if not model:
+        ui.fail("A model name is required")
+        return 1
+    items.append({"provider": prov, "base_url": base, "api_key": key, "model": model})
+    cfg["fallbacks"] = items
+    save(cfg)
+    ui.ok(f"Added backup engine {len(items)}: {prov} / {model}")
+    ui.hint("It is used automatically when the main engine fails or is rate-limited. Check it with: corepack gateway doctor")
+    return 0
+
+
+def cmd_pair(args) -> int:
+    cfg = load_file()
+    if not cfg.get("token"):
+        ui.fail("No token yet. Run: corepack gateway init")
+        return 1
+    port = args.port or int(cfg["port"])
+    ui.header("Pairing codes")
+    print("  Copy ONE line to your phone (any messenger or email to yourself), then in the app tap 'Paste pairing code'.\n")
+    print(f"  USB cable (needs adb reverse, done by 'gateway start'):\n    {pairing_uri(f'http://127.0.0.1:{port}/v1', cfg['token'])}\n")
+    ips = lan_addresses()
+    if ips:
+        print("  Wi-Fi or hotspot (start the gateway with --lan):")
+        for ip in ips:
+            print(f"    {pairing_uri(f'http://{ip}:{port}/v1', cfg['token'])}")
+    else:
+        ui.info("No Wi-Fi address found on this PC, so only the USB code applies.")
+    return 0
+
+
+def run_doctor(cfg: dict, port: int) -> list[tuple[str, str, str]]:
+    """Preflight checks. Each is (status, what, detail) with status ok / warn / fail."""
+    out: list[tuple[str, str, str]] = []
+    bad = validate(cfg)
+    if bad:
+        return [("fail", "Setup", "; ".join(bad) + "  (run: corepack gateway init)")]
+    out.append(("ok", "Setup", f"{cfg.get('provider') or 'engine'} / {cfg['model']}, phone token set"))
+    gw = Gateway(cfg)
+    provs = gw.providers()
+    payload = {"stream": False, "max_tokens": 32, "messages": [{"role": "user", "content": "Reply with one word: ready"}]}
+    results = []
+    for i, prov in enumerate(provs):
+        t0 = time.monotonic()
+        resp, err = gw._call_one(payload, prov, None, can_wait=False)
+        if err:
+            results.append((i, False, gw.redact(err[1])))
+            continue
+        try:
+            with resp:
+                json.loads(resp.read())["choices"][0]
+            results.append((i, True, f"replied in {time.monotonic() - t0:.1f}s"))
+        except (ValueError, KeyError, IndexError, TypeError):
+            results.append((i, False, "answered, but not in the expected format"))
+    main_ok = results[0][1]
+    backup_ok = any(ok for i, ok, _ in results if i > 0)
+    for i, ok, detail in results:
+        name = "Main engine" if i == 0 else f"Backup engine {i}"
+        label = f"{name} ({provs[i]['label']} / {provs[i]['model']})"
+        if ok:
+            out.append(("ok", label, detail))
+        elif i == 0:
+            out.append(("warn" if backup_ok else "fail", label, detail + ("  (a backup works, so the demo would still run)" if backup_ok else "")))
+        else:
+            out.append(("warn", label, detail))
+    if len(provs) == 1:
+        out.append(("warn", "Backup engine", "none set: a rate limit during the demo would stop it. Add one: corepack gateway fallback add"))
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
+            out.append(("ok", "Gateway", f"already running on port {port}"))
+    except (OSError, ValueError):
+        sk = socket.socket()
+        try:
+            sk.bind(("127.0.0.1", port))
+            out.append(("ok", "Port", f"{port} is free (the gateway is not running yet)"))
+        except OSError:
+            out.append(("warn", "Port", f"{port} is in use by something else; use --port"))
+        finally:
+            sk.close()
+    adb = shutil.which("adb")
+    ips = lan_addresses()
+    if not adb:
+        out.append(("warn", "Phone over USB", "adb not found (sudo apt install adb); Wi-Fi mode still works"))
+    else:
+        try:
+            devs_out = subprocess.run([adb, "devices"], capture_output=True, text=True, timeout=15).stdout
+            devs = parse_adb_devices(devs_out)
+            if devs:
+                rev = subprocess.run([adb, "-s", devs[0], "reverse", "--list"], capture_output=True, text=True, timeout=15).stdout
+                usb_ok = parse_adb_reverse(rev, port)
+                out.append(("ok" if usb_ok else "warn", "Phone over USB", f"{devs[0]} connected" + ("" if usb_ok else f"; link not set up yet (the gateway does it on start, or: adb reverse tcp:{port} tcp:{port})")))
+            elif parse_adb_unauthorized(devs_out):
+                out.append(("warn", "Phone over USB", "phone is connected but has not accepted USB debugging: look at the phone's screen"))
+            else:
+                out.append(("warn", "Phone over USB", "no phone found (cable, USB debugging); Wi-Fi mode still works"))
+        except (OSError, subprocess.SubprocessError) as e:
+            out.append(("warn", "Phone over USB", f"adb failed: {e}"))
+    if ips:
+        out.append(("ok", "Wi-Fi mode", "this PC is at " + ", ".join(ips) + "; start with --lan and use a pairing code"))
+    else:
+        out.append(("warn", "Wi-Fi mode", "no Wi-Fi address found"))
+    return out
+
+
+def doctor_verdict(checks: list[tuple[str, str, str]]) -> bool:
+    """Ready when nothing failed. Warnings are advice."""
+    return not any(st == "fail" for st, _, _ in checks)
+
+
+def cmd_doctor(args) -> int:
+    cfg = load()
+    port = args.port or int(cfg["port"])
+    ui.header("Demo preflight")
+    checks = run_doctor(cfg, port)
+    for st, what, detail in checks:
+        {"ok": ui.ok, "warn": ui.warn, "fail": ui.fail}[st](f"{what}: {detail}")
+    ready = doctor_verdict(checks)
+    print()
+    (ui.ok if ready else ui.fail)("READY: nothing blocking" if ready else "NOT READY: fix the failed lines above")
+    return 0 if ready else 1
+
+
 def cmd_test(args) -> int:
     cfg = load()
     bad = validate(cfg)
@@ -492,7 +752,7 @@ def cmd_start(args) -> int:
             ui.fail(b)
         ui.hint("Run: corepack gateway init")
         return 1
-    host = args.host or cfg["host"]
+    host = args.host or ("0.0.0.0" if args.lan else cfg["host"])
     port = args.port or int(cfg["port"])
     try:
         srv = make_server(cfg, host, port, verbose=True)
@@ -504,6 +764,12 @@ def cmd_start(args) -> int:
     ui.ok(f"Limit    {cfg['rpm'] or 'none'} requests/min")
     ui.ok(f"URL      http://127.0.0.1:{port}/v1")
     ui.ok(f"Token    {cfg['token']}")
+    ui.ok(f"Pairing  {pairing_uri(f'http://127.0.0.1:{port}/v1', cfg['token'])}   (USB; paste it into the app)")
+    if cfg.get("fallbacks"):
+        ui.ok(f"Backup   {len(cfg['fallbacks'])} engine(s) ready if the main one fails")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        for ip in lan_addresses():
+            ui.ok(f"Wi-Fi    http://{ip}:{port}/v1   {pairing_uri(f'http://{ip}:{port}/v1', cfg['token'])}")
     if host not in ("127.0.0.1", "localhost", "::1"):
         ui.warn(f"Listening on {host}: anyone who reaches this port with the token can spend your API quota.")
     if not args.no_adb:
@@ -535,12 +801,27 @@ def add_parsers(sub) -> None:
     s.add_argument("--host")
     s.add_argument("--port", type=int)
     s.add_argument("--no-adb", action="store_true", help="don't run adb reverse")
+    s.add_argument("--lan", action="store_true", help="also listen on Wi-Fi / hotspot so phones without a cable can connect")
     t = gs.add_parser("token", help="show or rotate the phone token")
     t.add_argument("--rotate", action="store_true")
+    pr = gs.add_parser("pair", help="print one-line pairing codes for the phone app")
+    pr.add_argument("--port", type=int)
+    d = gs.add_parser("doctor", help="preflight check before a demo")
+    d.add_argument("--port", type=int)
+    fb = gs.add_parser("fallback", help="backup engines used if the main one fails or is rate-limited")
+    fbs = fb.add_subparsers(dest="fb_cmd")
+    fa = fbs.add_parser("add", help="add a backup engine")
+    fa.add_argument("--provider", choices=list(PRESETS))
+    fa.add_argument("--base-url")
+    fa.add_argument("--model")
+    fa.add_argument("--api-key-env")
+    fbs.add_parser("list", help="show backup engines")
+    fbs.add_parser("clear", help="remove all backup engines")
 
 
 def dispatch(args, parser) -> int:
-    fn = {"init": cmd_init, "test": cmd_test, "start": cmd_start, "token": cmd_token}.get(args.gw_cmd)
+    fn = {"init": cmd_init, "test": cmd_test, "start": cmd_start, "token": cmd_token, "pair": cmd_pair,
+          "doctor": cmd_doctor, "fallback": cmd_fallback}.get(args.gw_cmd)
     if not fn:
         parser.parse_args(["gateway", "--help"])
         return 0
