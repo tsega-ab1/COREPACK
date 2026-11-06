@@ -3,6 +3,7 @@ package com.corepack.pet
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
+import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
@@ -10,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,6 +26,15 @@ class ChatActivity : Activity() {
     companion object {
         @Volatile
         var visible = false
+
+        private const val MAX_CONTEXT = 6000
+        private val QUICK_ACTIONS = listOf(
+            "Summarize" to "Summarize this in two or three sentences:",
+            "Translate" to "Translate this to English:",
+            "Explain" to "Explain this simply:",
+            "Save as note" to "Save this as a note with a short title:",
+            "Draft reply" to "Draft a short, polite reply to this message:",
+        )
     }
 
     private lateinit var title: TextView
@@ -33,6 +44,11 @@ class ChatActivity : Activity() {
     private lateinit var action: Button
 
     private val views = HashMap<ChatStore.Msg, TextView>()
+
+    /** Text shared into the pet (Share, or "Ask pet" on selected text), waiting to be used. */
+    private var contextText: String? = null
+    private lateinit var contextBar: LinearLayout
+    private lateinit var contextSnippet: TextView
 
     @Volatile
     private var live: ChatStore.Msg? = null
@@ -71,7 +87,42 @@ class ChatActivity : Activity() {
             addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(action)
         }
+        contextBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, dp(6), 0, dp(4))
+        }
+        contextSnippet = TextView(this).apply {
+            textSize = 12f
+            maxLines = 3
+            setTextColor(0xFF5F5E5A.toInt())
+            setTypeface(typeface, Typeface.ITALIC)
+        }
+        contextBar.addView(contextSnippet)
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((label, prompt) in QUICK_ACTIONS) {
+            chips.addView(Button(this).apply {
+                text = label
+                isAllCaps = false
+                textSize = 12f
+                minHeight = 0
+                minimumHeight = 0
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                setOnClickListener { useContext(label, prompt) }
+            })
+        }
+        chips.addView(Button(this).apply {
+            text = "x"
+            isAllCaps = false
+            textSize = 12f
+            minHeight = 0
+            minimumHeight = 0
+            setOnClickListener { clearContext() }
+        })
+        contextBar.addView(HorizontalScrollView(this).apply { addView(chips) })
+
         root.addView(title)
+        root.addView(contextBar)
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(row)
         setContentView(root)
@@ -83,6 +134,37 @@ class ChatActivity : Activity() {
         window.setGravity(Gravity.BOTTOM)
 
         for (m in ChatStore.snapshot()) render(m)
+        handleIncoming(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncoming(intent)
+    }
+
+    /** Text arriving from another app: Share to the pet, or "Ask pet" in the selection menu. */
+    private fun handleIncoming(i: Intent?) {
+        val shared = when (i?.action) {
+            Intent.ACTION_SEND -> i.getStringExtra(Intent.EXTRA_TEXT)
+            Intent.ACTION_PROCESS_TEXT -> i.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            else -> null
+        }?.trim()?.take(MAX_CONTEXT)
+        if (shared.isNullOrEmpty()) return
+        contextText = shared
+        contextSnippet.text = "Selected: " + shared.replace('\n', ' ').take(160) + if (shared.length > 160) "..." else ""
+        contextBar.visibility = View.VISIBLE
+    }
+
+    private fun clearContext() {
+        contextText = null
+        contextBar.visibility = View.GONE
+    }
+
+    private fun useContext(label: String, prompt: String) {
+        val ctx = contextText ?: return
+        val shown = label + ": " + ctx.replace('\n', ' ').take(80) + if (ctx.length > 80) "..." else ""
+        submit(shown, prompt + "\n\n" + ctx)
     }
 
     override fun onStart() {
@@ -160,12 +242,19 @@ class ChatActivity : Activity() {
         val text = input.text.toString().trim()
         if (text.isEmpty()) return
         input.setText("")
-        render(ChatStore.add("user", text))
+        val ctx = contextText
+        if (ctx != null) submit("$text  (with the selected text)", text + "\n\n---\n" + ctx) else submit(text, text)
+    }
+
+    /** [shown] is what the chat displays; [sent] is what the model receives. */
+    private fun submit(shown: String, sent: String) {
+        clearContext()
+        render(ChatStore.add("user", shown))
         live = null
         action.text = "Stop"
         title.text = "Chat - thinking..."
         PetBus.set(Phase.THINKING)
-        PetAgent.send(this, text, agentListener)
+        PetAgent.send(this, sent, agentListener)
     }
 
     private fun finishTurn() {

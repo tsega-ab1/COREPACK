@@ -1,6 +1,6 @@
 # CorePack Pet (Android)
 
-A pet that floats over other apps; tap it to chat. It talks to the COREPACK gateway on your PC over
+A pet (a small glossy character called Mochi) that floats over other apps; tap it to chat. It talks to the COREPACK gateway on your PC over
 the USB cable, and acts as a small agent: it can use tools, remember things about you, and show how
 it feels. See `../docs/PHONE_PET.md` for the overview.
 
@@ -22,22 +22,34 @@ adb install --user 0 -r app/build/outputs/apk/debug/app-debug.apk
 2. In the app: paste the token, tap **Save and test connection** (`Connected. Model: ...`).
 3. Tap **Allow drawing over other apps**, then **Start the pet**. Drag it; tap it to chat.
 
-## What the agent can do
+## What the pet can do
 
-| Tool | When the model uses it |
+It is an assistant for the phone, not only a chat. Each group can be switched off in the app
+(**What the pet may do**). Details, permissions and what leaves the phone: `../docs/PHONE_PET.md`.
+
+Try, one at a time:
+
+| Say or do | What should happen |
 |---|---|
-| `get_time` | you ask the time or date |
-| `get_battery` | you ask about the phone's battery |
-| `remember` | you tell it something worth keeping (name, tastes, plans) |
-| `forget` | you ask it to forget something |
-| `set_pet_mood` | the mood of the conversation changes; the pet's face follows |
+| "remind me in 2 minutes to drink water" | after 2 minutes the pet turns amber, hops, shows a speech bubble and a notification |
+| "what's on my reminders?" / "cancel the water reminder" | lists / cancels it |
+| "add buy milk to my to-do list", then "what's on my list?", "I bought the milk" | a to-do list kept on the phone |
+| "save a note: the lab code is on the blue shelf", later "what did I note about the lab?" | a notebook you can search |
+| "set an alarm for 6:30" / "timer for 10 minutes" | the clock app gets it |
+| "open Telegram" / "show me the nearest pharmacy on the map" | the app opens |
+| "turn the flashlight on" | torch on |
+| "draft a text to 0911000000 saying I'm running late" | the messages app opens with the draft; you press send |
+| "what's the weather in Addis Ababa?" / "tell me about injera" | weather and a short Wikipedia summary |
+| select text in another app, choose **Ask pet**, tap **Summarize** | the text is summarized in the chat |
+| (battery nudge) `adb shell dumpsys battery unplug; adb shell dumpsys battery set level 14` | a bubble: "Your battery is at 14%". Undo with `adb shell dumpsys battery reset` |
 
-Try: "what time is it?", "what's my battery?", "remember that I like jasmine tea",
-"I'm so happy today!", then (after closing and reopening the chat) "what do I like to drink?".
+The main screen has **Reminders, tasks and notes** and **What the pet remembers** to see and clear what
+is stored. Small grey notes in the chat ("used set_reminder") show when a tool ran.
 
-Saved facts live on the phone in `facts.txt` (app-private) and go into every prompt. Tap
-**What the pet remembers** on the main screen to see them or **Forget everything**.
-Small grey notes in the chat ("used get_battery") show when a tool ran.
+## The character
+
+Drawn in code from measurements of a design reference: see `../docs/MOCHI_DESIGN.md` for the analysis and
+the attribution note (read it before publishing). The look lives in `app/src/main/java/com/corepack/pet/mochi/`.
 
 ## Notes
 

@@ -10,6 +10,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
+import com.corepack.pet.agent.Capability
+import com.corepack.pet.agent.TimeParse
+import java.time.ZoneId
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -91,6 +94,31 @@ class MainActivity : Activity() {
         col.addView(button("Stop the pet") {
             startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
             status.text = "Pet stopped."
+        })
+        col.addView(button("What the pet may do") {
+            val caps = Capability.entries
+            val on = PetStores.capabilities(this)
+            val labels = caps.map { it.label + ": " + it.blurb }.toTypedArray()
+            val checked = BooleanArray(caps.size) { caps[it] in on }
+            AlertDialog.Builder(this)
+                .setTitle("What the pet may do")
+                .setMultiChoiceItems(labels, checked) { _, i, isOn -> PetStores.setCapability(this, caps[i], isOn) }
+                .setPositiveButton("Done", null)
+                .show()
+        })
+        col.addView(button("Reminders, tasks and notes") {
+            val zone = ZoneId.systemDefault()
+            val rem = PetStores.reminders(this).active()
+            val tasks = PetStores.tasks(this).list(false)
+            val notes = PetStores.notes(this).recent(5)
+            val sb = StringBuilder()
+            sb.append("Reminders\n")
+            sb.append(if (rem.isEmpty()) "  none\n" else rem.joinToString("") { "  " + TimeParse.format(it.dueMs, zone) + " - " + it.text + "\n" })
+            sb.append("\nTo-do\n")
+            sb.append(if (tasks.isEmpty()) "  none\n" else tasks.joinToString("") { "  [ ] " + it.text + "\n" })
+            sb.append("\nRecent notes\n")
+            sb.append(if (notes.isEmpty()) "  none\n" else notes.joinToString("") { "  " + it.title + "\n" })
+            AlertDialog.Builder(this).setTitle("On this phone").setMessage(sb.toString()).setPositiveButton("Close", null).show()
         })
         col.addView(button("What the pet remembers") {
             val facts = PetAgent.facts(this).all()

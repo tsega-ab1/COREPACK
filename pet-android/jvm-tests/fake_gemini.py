@@ -50,6 +50,9 @@ class H(BaseHTTPRequestHandler):
                 {"role": "assistant", "tool_calls": [{"index": 0, "id": "function-call-A1", "type": "function",
                     "function": {"name": "remember", "arguments": "{\"fa"}, "extra_content": sig("SIG_A")}]},
                 {"tool_calls": [{"index": 0, "function": {"arguments": "ct\":\"likes jasmine tea\"}"}}]}])
+        if "remind" in text:         # a number argument (in_minutes) and a signature on the call
+            return sse(self, [{"role": "assistant", "tool_calls": [{"id": "function-call-R1", "type": "function",
+                    "function": {"name": "set_reminder", "arguments": "{\"text\":\"stretch\",\"in_minutes\":15}"}, "extra_content": sig("SIG_R")}]}])
         if "happy" in text:         # text + fire-and-forget tool; signature on the TEXT delta, none on the call
             return sse(self, [
                 {"role": "assistant", "content": "That's wonderful! ", "extra_content": sig("SIG_B")},

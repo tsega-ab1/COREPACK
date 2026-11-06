@@ -5,8 +5,6 @@ import android.os.Looper
 import com.corepack.pet.agent.PetMood
 import java.util.concurrent.CopyOnWriteArrayList
 
-enum class Phase { IDLE, QUEUED, THINKING, TOOL, TALKING, SETTLE, ERROR, OFFLINE, THROTTLED }
-
 /** One shared place that says what the pet is doing and feeling. Safe to call from any thread. */
 object PetBus {
     /** A busy phase that never gets a follow-up falls back to idle after this long. */

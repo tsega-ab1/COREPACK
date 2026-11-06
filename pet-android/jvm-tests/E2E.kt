@@ -3,6 +3,12 @@ import org.json.JSONArray
 import java.io.File
 import java.net.URL
 
+class FakeScheduler : ReminderScheduler {
+    val scheduled = ArrayList<Reminder>()
+    override fun schedule(r: Reminder) { scheduled.add(r) }
+    override fun cancel(id: Long) {}
+}
+
 var failures = 0
 fun check(name: String, ok: Boolean, detail: String = "") {
     println((if (ok) "PASS " else "FAIL ") + name + (if (!ok && detail.isNotEmpty()) "   -> $detail" else ""))
@@ -25,7 +31,9 @@ fun main() {
     val url = "http://127.0.0.1:8788/v1"
     val facts = FactStore(File.createTempFile("facts", ".txt").also { it.delete() })
     var mood: PetMood? = null
-    val tools = listOf(TimeTool(), RememberTool(facts), ForgetTool(facts), MoodTool { mood = it })
+    val reminders = ReminderStore(File.createTempFile("rem", ".tsv").also { it.delete() })
+    val scheduler = FakeScheduler()
+    val tools = listOf(TimeTool(), RememberTool(facts), ForgetTool(facts), MoodTool { mood = it }, SetReminderTool(reminders, scheduler), ListRemindersTool(reminders))
 
     fun run(userText: String): Pair<String, Rec> {
         val loop = AgentLoop(GatewayModel(url, token), tools)
@@ -70,6 +78,24 @@ fun main() {
     // 4) plain chat
     val (d, recD) = run("hello")
     check("plain chat streams text", d == "Hello there." && recD.text.toString() == d)
+
+    // 4b) a new tool end to end: a JSON number argument, the schema sent upstream, signature echoed
+    before = upstreamLog().length()
+    val t0 = System.currentTimeMillis()
+    val (r, _) = run("please remind me in 15 minutes to stretch")
+    log = upstreamLog()
+    check("reminder: stored with the text from the model", reminders.active().size == 1 && reminders.active()[0].text == "stretch", reminders.active().toString())
+    val due = scheduler.scheduled.singleOrNull()?.dueMs ?: 0L
+    check("reminder: scheduled 15 minutes from now (number argument understood)", due in (t0 + 14 * 60_000L)..(System.currentTimeMillis() + 15 * 60_000L + 1000), "$due")
+    check("reminder: the answer carries the tool result", r.startsWith("Result: Reminder #1 set for"), r)
+    val reqR = log.getJSONObject(before)
+    val fnsR = (0 until reqR.getJSONArray("tools").length()).map { reqR.getJSONArray("tools").getJSONObject(it).getJSONObject("function") }
+    val setR = fnsR.first { it.getString("name") == "set_reminder" }
+    check("reminder: schema reaches Gemini with a number type and required text", setR.getJSONObject("parameters").getJSONObject("properties").getJSONObject("in_minutes").getString("type") == "number" && setR.getJSONObject("parameters").getJSONArray("required").getString(0) == "text")
+    check("reminder: no-argument tool has no parameters", !fnsR.first { it.getString("name") == "list_reminders" }.has("parameters"))
+    check("reminder: signature echoed on the follow-up", log.getJSONObject(log.length() - 1).getJSONArray("messages").let { arr ->
+        (0 until arr.length()).map { arr.getJSONObject(it) }.last { it.optString("role") == "assistant" }
+    }.getJSONArray("tool_calls").getJSONObject(0).getJSONObject("extra_content").getJSONObject("google").getString("thought_signature") == "SIG_R")
 
     // 5) the fake really does enforce signatures: a call without one must fail the follow-up with a clear error
     val msg = try { run("nosig please"); "no error" } catch (e: ModelException) { e.message ?: "" }
