@@ -13,7 +13,7 @@ Phone (pet app)  --USB cable-->  COREPACK gateway (PC)  -->  Gemini / Grok / loc
 
 | Part | Where | What it does |
 |---|---|---|
-| Gateway | `corepack/gateway.py` | OpenAI-compatible server on the PC: checks the phone's token, rate-limits, retries, streams replies, and sends status events |
+| Gateway | `corepack/gateway*.py` and friends (see `docs/GATEWAY.md`, Code layout) | OpenAI-compatible server on the PC: checks the phone's token, rate-limits, retries, streams replies, and sends status events |
 | Pet app | `pet-android/` | Kotlin app: draggable overlay pet, chat sheet, and the agent |
 | Docs | `docs/GATEWAY.md` | Gateway setup, protocol, security notes |
 

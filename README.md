@@ -56,6 +56,7 @@ corepack/
   scheduler.py      work-stealing queue      tasks.py     the compute jobs
   pool.py           local process pool       netinfo.py   USB link + discovery
   bench.py nettest.py llm.py doctor.py config.py peers.py
+  gateway*.py providers.py upstream.py ratelimit.py adb.py pairing.py   the phone AI gateway (docs/GATEWAY.md)
 tests/              python3 -m unittest discover -s tests
 docs/PHASE0.md     step-by-step + troubleshooting
 results/            benchmark JSON (commit these)

@@ -140,6 +140,58 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(len(mlog), 1, "the rate-limited main engine is left alone while it cools down")
         self.assertEqual(len(blog), 3)
 
+    def test_a_server_error_makes_main_sit_out_for_a_while(self):
+        main, mlog = self.engine(fail(503, message="high demand"))
+        back, blog = self.engine(ok("backup ok"))
+        port = self.gw(main, [back]).server_address[1]
+        for _ in range(3):
+            code, out = post(port, self.MSG)
+            self.assertEqual(code, 200)
+        self.assertEqual(len(mlog), 1, "after one 503 the busy engine is not asked again on every message")
+        self.assertEqual(len(blog), 3)
+
+    def test_main_comes_back_after_the_cooldown(self):
+        main, mlog = self.engine(fail(503))
+        back, blog = self.engine(ok("backup ok"))
+        g = self.gw(main, [back])
+        port = g.server_address[1]
+        post(port, self.MSG)
+        g.gw.cooling[0] = 0                    # the cooldown has run out
+        post(port, self.MSG)
+        self.assertEqual(len(mlog), 2)
+
+    def test_a_single_engine_is_still_tried_after_a_server_error(self):
+        main, mlog = self.engine(fail(503, message="busy"))
+        port = self.gw(main).server_address[1]
+        for _ in range(3):
+            code, out = post(port, self.MSG)
+        self.assertEqual(code, 502)
+        self.assertEqual(len(mlog), 3, "with no backup there is nowhere else to go, so it keeps trying")
+
+    def test_an_engine_that_recovers_is_first_in_line_again(self):
+        calls = {"n": 0}
+
+        def flaky(h, body):
+            calls["n"] += 1
+            (fail(503) if calls["n"] == 1 else ok("main is back"))(h, body)
+
+        main, mlog = self.engine(flaky)
+        back, blog = self.engine(fail(503))
+        port = self.gw(main, [back]).server_address[1]
+        post(port, self.MSG)                   # both fail, so both cool down
+        code, out = post(port, self.MSG)       # main is the last resort, and it has recovered
+        self.assertIn("main is back", out)
+        post(port, self.MSG)
+        self.assertEqual((len(mlog), len(blog)), (3, 1), "once it answered, main is first in line again")
+
+    def test_a_client_error_does_not_bench_the_engine(self):
+        main, mlog = self.engine(fail(400, message="bad request"))
+        back, blog = self.engine(ok("backup handled it"))
+        port = self.gw(main, [back]).server_address[1]
+        post(port, self.MSG)
+        post(port, self.MSG)
+        self.assertEqual(len(mlog), 2, "a 400 is about that request, not about the engine, so main is still tried first")
+
     def test_main_is_used_when_healthy(self):
         main, mlog = self.engine(ok("main ok"))
         back, blog = self.engine(ok("backup ok"))
