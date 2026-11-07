@@ -11,6 +11,9 @@ They are plain Kotlin programs that print PASS or FAIL, not Gradle tests.
   argument checks, weather and Wikipedia parsing against realistic API responses, nudge timing, the prompt.
 - `ModuleTests.kt`: the tool registry (order, switches, lazy building) and a parity check that the prompt built from
   modules is word for word what the old hand-written builder produced, for all 32 combinations of switches.
+- `SessionTests.kt`: `AgentSession`, the conversation itself: history carry-over, reminders folded in between
+  messages, cleanup after a failed turn, trimming, cancelling, and a tool round trip, with a scripted fake model.
+- `PacedTests.kt`: `PacedSink`, which releases a reply in readable slices: order, Stop, pace, end-of-reply hook.
 - `MochiTests.kt`: the character: phase/mood mapping, palette, motion against the measured timings
   (dance beat, still bodies, breathing, blinking), cross-fades, one-off expressions, and a render
   sanity check of every state.

@@ -43,6 +43,9 @@ interface TurnHooks {
 /** The brain: sends messages (and tool specs) and returns one round. Blocking. */
 interface Model {
     fun turn(messages: List<AgentMessage>, tools: List<ToolSpec>, hooks: TurnHooks): ModelTurn
+
+    /** Stops a turn that is in progress. A model that cannot be interrupted can leave this as it is. */
+    fun cancel() {}
 }
 
 interface Tool {

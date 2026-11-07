@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Reminders are set again after a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets reminders go off at the exact minute. On Android 12 and later the user switches it on in
+         Settings > Apps > Special access > Alarms & reminders. Without it the pet falls back to approximate timing. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Lets the pet set alarms and timers in the clock app. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 

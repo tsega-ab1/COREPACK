@@ -21,6 +21,17 @@ class FakeScheduler : ReminderScheduler {
     override fun cancel(id: Long) { cancelled.add(id) }
 }
 
+class ThrowingScheduler : ReminderScheduler {
+    override fun schedule(r: Reminder) { throw SecurityException("no alarm permission") }
+    override fun cancel(id: Long) {}
+}
+
+class ApproxScheduler : ReminderScheduler {
+    override fun schedule(r: Reminder) {}
+    override fun cancel(id: Long) {}
+    override fun isExact(): Boolean = false
+}
+
 class FakeHttp(private val routes: Map<String, String>, private val fail: String? = null) : Http {
     val urls = ArrayList<String>()
     override fun get(url: String): String {
@@ -94,6 +105,13 @@ fun main() {
         val cancel = CancelReminderTool(st, sch)
         check("cancel tells the scheduler too", cancel.run(mapOf("which" to "#1")).startsWith("Cancelled: #1") && sch.cancelled == listOf(1L))
         check("cancel with no match", cancel.run(mapOf("which" to "unicorn")) == "No waiting reminder matched.")
+        val brokenStore = ReminderStore(tmp())
+        val brokenOut = SetReminderTool(brokenStore, ThrowingScheduler()) { now }.run(mapOf("text" to "stretch", "in_minutes" to 5))
+        check("a reminder whose alarm cannot be set is refused with the reason", brokenOut.startsWith("error:") && brokenOut.contains("no alarm permission"), brokenOut)
+        check("and is not left behind in the list", brokenStore.active().isEmpty())
+        val approxOut = SetReminderTool(ReminderStore(tmp()), ApproxScheduler()) { now }.run(mapOf("text" to "stretch", "in_minutes" to 5))
+        check("approximate timing is reported so the pet can tell the user", approxOut.startsWith("Reminder #1 set for") && approxOut.contains("approximate"), approxOut)
+        check("exact timing adds no note", out == "Reminder #1 set for Mon 12 Oct 15:20: stretch")
     }
     run {
         val ts = TaskStore(tmp())

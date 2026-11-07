@@ -10,6 +10,9 @@ import java.util.Locale
 interface ReminderScheduler {
     fun schedule(r: Reminder)
     fun cancel(id: Long)
+
+    /** False when the phone only allows approximate timing, so a reminder may arrive a few minutes late. */
+    fun isExact(): Boolean = true
 }
 
 internal fun numberArg(v: Any?): Double? = when (v) {
@@ -77,8 +80,16 @@ class SetReminderTool(
         if (due.toInstant().toEpochMilli() < now.toInstant().toEpochMilli() + 5_000) return "error: that time has already passed"
         if (due.isAfter(now.plusYears(1))) return "error: too far ahead (one year at most)"
         val r = store.add(due.toInstant().toEpochMilli(), text) ?: return "error: too many waiting reminders (50 at most)"
-        scheduler.schedule(r)
-        return "Reminder #${r.id} set for ${TimeParse.format(r.dueMs, now.zone)}: ${r.text}"
+        try {
+            scheduler.schedule(r)
+        } catch (e: Exception) {
+            store.markDone(r.id)
+            return "error: couldn't set the alarm (${e.message ?: e.javaClass.simpleName}), so the reminder was not kept"
+        }
+        val note = if (scheduler.isExact()) "" else
+            " Note: this phone only allows approximate alarm timing for the app, so it may arrive a few minutes late." +
+                " Tell the user they can switch on 'Alarms & reminders' for the app in Settings for exact timing."
+        return "Reminder #${r.id} set for ${TimeParse.format(r.dueMs, now.zone)}: ${r.text}" + note
     }
 }
 

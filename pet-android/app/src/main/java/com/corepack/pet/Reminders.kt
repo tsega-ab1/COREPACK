@@ -8,10 +8,14 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import com.corepack.pet.agent.Reminder
 import com.corepack.pet.agent.ReminderScheduler
 
-/** Schedules reminders with the system alarm clock, which still fires in Doze and needs no special permission. */
+/**
+ * Schedules reminders with the system alarm clock, which fires on the minute even in Doze. From Android 12 that
+ * needs the "Alarms & reminders" permission; without it, an approximate alarm is used so the reminder still comes.
+ */
 class AlarmReminderScheduler(private val context: Context) : ReminderScheduler {
     private val alarms = context.getSystemService(AlarmManager::class.java)
 
@@ -21,12 +25,22 @@ class AlarmReminderScheduler(private val context: Context) : ReminderScheduler {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
+    override fun isExact(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()
+
     override fun schedule(r: Reminder) {
-        val show = PendingIntent.getActivity(
-            context, 7, Intent(context, ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        alarms.setAlarmClock(AlarmManager.AlarmClockInfo(r.dueMs, show), fire(r.id))
+        if (isExact()) {
+            try {
+                val show = PendingIntent.getActivity(
+                    context, 7, Intent(context, ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+                alarms.setAlarmClock(AlarmManager.AlarmClockInfo(r.dueMs, show), fire(r.id))
+                return
+            } catch (e: SecurityException) {
+                // The permission went away between the check and the call: use the approximate alarm below.
+            }
+        }
+        alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, r.dueMs, fire(r.id))
     }
 
     override fun cancel(id: Long) {

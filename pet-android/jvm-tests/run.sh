@@ -42,6 +42,8 @@ echo "== compile"
 compile unit "$AGENT"/*.kt "$HERE/UnitTests.kt"
 compile assist "$AGENT"/*.kt "$HERE/AssistantTests.kt"
 compile modules "$AGENT"/*.kt "$HERE/ModuleTests.kt"
+compile session "$AGENT"/*.kt "$HERE/SessionTests.kt"
+compile paced "$AGENT"/*.kt "$HERE/PacedTests.kt"
 compile mochi "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/mochi/*.kt "$HERE/MochiTests.kt"
 compile e2e "$AGENT"/*.kt "$HERE/E2E.kt"
 
@@ -53,6 +55,12 @@ java -cp "$OUT/assist:$CP" AssistantTestsKt
 
 echo "== module and prompt tests"
 java -cp "$OUT/modules:$CP" ModuleTestsKt
+
+echo "== conversation session tests"
+java -cp "$OUT/session:$CP" SessionTestsKt
+
+echo "== paced reply tests"
+java -cp "$OUT/paced:$CP" PacedTestsKt
 
 echo "== mochi character tests"
 java -cp "$OUT/mochi:$CP" MochiTestsKt

@@ -26,7 +26,7 @@ class GatewayModel(
     var cancelled = false
         private set
 
-    fun cancel() {
+    override fun cancel() {
         cancelled = true
         Thread {
             try {

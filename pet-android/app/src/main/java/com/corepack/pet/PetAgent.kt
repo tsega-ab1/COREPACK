@@ -2,46 +2,57 @@ package com.corepack.pet
 
 import android.content.Context
 import com.corepack.pet.agent.AgentLoop
-import com.corepack.pet.agent.AgentMessage
+import com.corepack.pet.agent.AgentSession
 import com.corepack.pet.agent.FactStore
 import com.corepack.pet.agent.GatewayModel
-import com.corepack.pet.agent.HistoryTrim
+import com.corepack.pet.agent.Model
 import com.corepack.pet.agent.ModelException
+import com.corepack.pet.agent.PacedSink
 import com.corepack.pet.agent.Prompt
+import com.corepack.pet.agent.ReplySink
+import com.corepack.pet.agent.StreamedText
+import com.corepack.pet.agent.ToolModule
 import com.corepack.pet.agent.ToolRegistry
 import java.io.File
 import java.time.ZonedDateTime
 
-/** Runs the agent for the chat screen and keeps the pet's face in step with what is happening. */
+/**
+ * Runs the agent for the chat screen and keeps the pet's face in step with what is happening.
+ * The conversation itself lives in [AgentSession]; this object adds the Android side: settings, the pet's
+ * face, the chat screen and the threads.
+ */
 object PetAgent {
     private const val MAX_MESSAGES = 40
 
-    interface UiListener {
-        fun onTool(name: String)
-        fun onToken(text: String)
-        fun onDone(text: String)
-        fun onError(message: String, unreachable: Boolean)
-    }
+    /** How fast a reply is shown in the chat. The engine can send a whole story in a second; this keeps it readable. */
+    private const val REVEAL_CHARS_PER_SECOND = 240
 
-    private val history = ArrayList<AgentMessage>()
+    interface UiListener : ReplySink
+
+    /**
+     * How the model and the modules are made for each message. Replace these to plug in another model or
+     * more modules; nothing else in this file needs to change.
+     */
+    @Volatile
+    var modelFactory: (Context) -> Model = { app -> GatewayModel(Prefs.baseUrl(app), Prefs.token(app)) }
+
+    @Volatile
+    var moduleFactory: (Context, FactStore) -> List<ToolModule> = { app, store -> PetModules.builtin(app, store) }
+
+    private val session = AgentSession(MAX_MESSAGES)
     private var facts: FactStore? = null
 
-    /** True from the moment a message is sent until its reply (or failure) is delivered. */
+    @Volatile
+    private var pacer: PacedSink? = null
+
+    /** True from the moment a message is sent until its reply (or failure) has been fully delivered to the chat. */
     @Volatile
     var busy = false
         private set
 
-    @Volatile
-    private var model: GatewayModel? = null
-
-    @Volatile
-    private var loop: AgentLoop? = null
-
     @Synchronized
     fun facts(context: Context): FactStore =
         facts ?: FactStore(File(context.applicationContext.filesDir, "facts.txt")).also { facts = it }
-
-    private val pendingInjected = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
     /**
      * Adds something the pet said by itself (a reminder, a nudge) to the chat and, at the start of the next
@@ -50,37 +61,29 @@ object PetAgent {
      */
     fun injectAssistant(context: Context, text: String) {
         ChatStore.add("assistant", text)
-        pendingInjected.add(text)
+        session.inject(text)
     }
 
-    /** Call with the history lock held. Keeps user/assistant alternation by folding into the last plain reply. */
-    private fun applyInjected() {
-        while (true) {
-            val text = pendingInjected.poll() ?: return
-            val last = history.lastOrNull()
-            if (last != null && last.role == "assistant" && last.toolCalls.isEmpty()) {
-                history[history.size - 1] = last.copy(content = (last.content.orEmpty() + "\n\n" + text).trim())
-            } else {
-                history.add(AgentMessage("assistant", text))
-            }
-        }
-    }
-
+    /** Stops the model, and stops showing any text that has not appeared yet. */
     fun cancel() {
-        loop?.cancelled = true
-        model?.cancel()
+        session.cancel()
+        pacer?.cancel()
     }
 
     fun send(context: Context, userText: String, ui: UiListener) {
         val app = context.applicationContext
         val store = facts(app)
-        val gateway = GatewayModel(Prefs.baseUrl(app), Prefs.token(app))
         val caps = PetStores.capabilities(app)
-        val registry = ToolRegistry(PetModules.builtin(app, store))
-        val agent = AgentLoop(gateway, registry.tools(caps))
-        model = gateway
-        loop = agent
+        val registry = ToolRegistry(moduleFactory(app, store))
+        session.arm(modelFactory(app), registry.tools(caps))
         busy = true
+
+        // Everything the chat hears goes through the pacer; it clears [busy] just before the final event.
+        val out = PacedSink(ui, charsPerSecond = REVEAL_CHARS_PER_SECOND, beforeEnd = { busy = false })
+        pacer = out
+
+        // The reply is shown as it streams in, so the chat is only handed text at the end if none of it streamed.
+        val streamed = StreamedText()
 
         val listener = object : AgentLoop.Listener {
             private var talking = false
@@ -98,17 +101,19 @@ object PetAgent {
                     talking = true
                     PetBus.set(Phase.TALKING)
                 }
-                ui.onToken(delta)
+                streamed.add(delta)
+                out.onToken(delta)
             }
 
             override fun onThinking() {
                 talking = false
+                streamed.newRound()
                 PetBus.set(Phase.THINKING)
             }
 
             override fun onToolStart(name: String) {
                 PetBus.set(Phase.TOOL)
-                ui.onTool(name)
+                out.onTool(name)
             }
 
             override fun onToolDone(name: String, result: String) = Unit
@@ -116,46 +121,32 @@ object PetAgent {
 
         Thread {
             try {
-                val reply = synchronized(history) {
-                    applyInjected()
-                    history.add(AgentMessage("user", userText))
-                    HistoryTrim.trim(history, MAX_MESSAGES)
-                    agent.run(history, Prompt.system(store.all(), ZonedDateTime.now(), caps, registry.promptHints(caps)), listener)
-                }
+                val reply = session.run(
+                    userText,
+                    { Prompt.system(store.all(), ZonedDateTime.now(), caps, registry.promptHints(caps)) },
+                    listener,
+                )
                 PetBus.setThenIdle(Phase.SETTLE, 1800L)
-                busy = false
-                ui.onDone(reply)
+                out.onDone(streamed.leftToShow(reply))
             } catch (e: ModelException) {
-                synchronized(history) { dropUnfinishedTurn() }
-                busy = false
                 when {
                     e.cancelled -> {
                         PetBus.set(Phase.IDLE)
-                        ui.onDone("")
+                        out.onDone("")
                     }
                     e.unreachable -> {
                         PetBus.set(Phase.OFFLINE)
-                        ui.onError("Can't reach the gateway. Is it running on the PC with the phone plugged in?", true)
+                        out.onError("Can't reach the gateway. Is it running on the PC with the phone plugged in?", true)
                     }
                     else -> {
                         PetBus.setThenIdle(Phase.ERROR, 3000L)
-                        ui.onError(e.message ?: "Something went wrong", false)
+                        out.onError(e.message ?: "Something went wrong", false)
                     }
                 }
             } catch (e: Exception) {
-                synchronized(history) { dropUnfinishedTurn() }
-                busy = false
                 PetBus.setThenIdle(Phase.ERROR, 3000L)
-                ui.onError(e.message ?: "Something went wrong", false)
+                out.onError(e.message ?: "Something went wrong", false)
             }
         }.start()
-    }
-
-    /** After a failure, remove the half-finished turn so the next message starts from a clean state. */
-    private fun dropUnfinishedTurn() {
-        val lastUser = history.indexOfLast { it.role == "user" }
-        if (lastUser >= 0) {
-            while (history.size > lastUser) history.removeAt(history.size - 1)
-        }
     }
 }
