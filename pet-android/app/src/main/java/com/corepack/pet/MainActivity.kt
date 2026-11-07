@@ -2,6 +2,7 @@ package com.corepack.pet
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -119,6 +120,14 @@ class MainActivity : Activity() {
             sb.append("\nRecent notes\n")
             sb.append(if (notes.isEmpty()) "  none\n" else notes.joinToString("") { "  " + it.title + "\n" })
             AlertDialog.Builder(this).setTitle("On this phone").setMessage(sb.toString()).setPositiveButton("Close", null).show()
+        })
+        col.addView(button("Allow exact reminder times") {
+            val alarms = getSystemService(AlarmManager::class.java)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()) {
+                status.text = "Reminders can already go off at the exact minute."
+            } else {
+                startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
+            }
         })
         col.addView(button("What the pet remembers") {
             val facts = PetAgent.facts(this).all()
