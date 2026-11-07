@@ -2,6 +2,7 @@
 # Tests for the phone app's code, on a plain JVM (no phone needed):
 #   1. agent unit tests: loop, memory, history trimming, tools
 #   2. assistant tests: reminders, tasks, notes, phone-action checks, weather and Wikipedia parsing, nudges, prompt
+#      (and module tests: the tool registry, and the prompt must match the old builder exactly)
 #   3. Mochi character tests: states, motion timings, cross-fades, renderer sanity
 #   4. end-to-end: agent -> real COREPACK gateway -> a fake Gemini that rejects requests with a
 #      missing thought signature or an empty tool schema
@@ -40,6 +41,7 @@ fi
 echo "== compile"
 compile unit "$AGENT"/*.kt "$HERE/UnitTests.kt"
 compile assist "$AGENT"/*.kt "$HERE/AssistantTests.kt"
+compile modules "$AGENT"/*.kt "$HERE/ModuleTests.kt"
 compile mochi "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/mochi/*.kt "$HERE/MochiTests.kt"
 compile e2e "$AGENT"/*.kt "$HERE/E2E.kt"
 
@@ -48,6 +50,9 @@ java -cp "$OUT/unit:$CP" UnitTestsKt
 
 echo "== assistant tests"
 java -cp "$OUT/assist:$CP" AssistantTestsKt
+
+echo "== module and prompt tests"
+java -cp "$OUT/modules:$CP" ModuleTestsKt
 
 echo "== mochi character tests"
 java -cp "$OUT/mochi:$CP" MochiTestsKt

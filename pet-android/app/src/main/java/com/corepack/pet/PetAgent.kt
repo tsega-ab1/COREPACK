@@ -2,29 +2,13 @@ package com.corepack.pet
 
 import android.content.Context
 import com.corepack.pet.agent.AgentLoop
-import com.corepack.pet.agent.AddTaskTool
 import com.corepack.pet.agent.AgentMessage
-import com.corepack.pet.agent.CancelReminderTool
-import com.corepack.pet.agent.Capability
-import com.corepack.pet.agent.CompleteTaskTool
 import com.corepack.pet.agent.FactStore
-import com.corepack.pet.agent.ForgetTool
 import com.corepack.pet.agent.GatewayModel
 import com.corepack.pet.agent.HistoryTrim
-import com.corepack.pet.agent.ListRemindersTool
-import com.corepack.pet.agent.ListTasksTool
 import com.corepack.pet.agent.ModelException
-import com.corepack.pet.agent.MoodTool
 import com.corepack.pet.agent.Prompt
-import com.corepack.pet.agent.RememberTool
-import com.corepack.pet.agent.SaveNoteTool
-import com.corepack.pet.agent.SearchNotesTool
-import com.corepack.pet.agent.SetReminderTool
-import com.corepack.pet.agent.TimeTool
-import com.corepack.pet.agent.Tool
-import com.corepack.pet.agent.UrlHttp
-import com.corepack.pet.agent.WeatherTool
-import com.corepack.pet.agent.WikiTool
+import com.corepack.pet.agent.ToolRegistry
 import java.io.File
 import java.time.ZonedDateTime
 
@@ -56,44 +40,6 @@ object PetAgent {
     @Synchronized
     fun facts(context: Context): FactStore =
         facts ?: FactStore(File(context.applicationContext.filesDir, "facts.txt")).also { facts = it }
-
-    /** The tools the model gets: the basics always, the rest only if the user has switched that group on. */
-    private fun buildTools(app: Context, store: FactStore, caps: Set<Capability>): List<Tool> {
-        val tools = ArrayList<Tool>()
-        tools += TimeTool()
-        tools += BatteryTool(app)
-        tools += RememberTool(store)
-        tools += ForgetTool(store)
-        tools += MoodTool { PetBus.setMood(it) }
-        if (Capability.REMINDERS in caps) {
-            val reminders = PetStores.reminders(app)
-            val scheduler = AlarmReminderScheduler(app)
-            tools += SetReminderTool(reminders, scheduler)
-            tools += ListRemindersTool(reminders)
-            tools += CancelReminderTool(reminders, scheduler)
-        }
-        if (Capability.TASKS_NOTES in caps) {
-            val tasks = PetStores.tasks(app)
-            val notes = PetStores.notes(app)
-            tools += AddTaskTool(tasks)
-            tools += ListTasksTool(tasks)
-            tools += CompleteTaskTool(tasks)
-            tools += SaveNoteTool(notes)
-            tools += SearchNotesTool(notes)
-        }
-        if (Capability.PHONE_ACTIONS in caps) {
-            tools += listOf(
-                SetAlarmTool(app), SetTimerTool(app), OpenAppTool(app), OpenUrlTool(app),
-                OpenMapsTool(app), ComposeSmsTool(app), DialTool(app), FlashlightTool(app),
-            )
-        }
-        if (Capability.LOOKUPS in caps) {
-            val http = UrlHttp()
-            tools += WeatherTool(http)
-            tools += WikiTool(http)
-        }
-        return tools
-    }
 
     private val pendingInjected = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
@@ -130,8 +76,8 @@ object PetAgent {
         val store = facts(app)
         val gateway = GatewayModel(Prefs.baseUrl(app), Prefs.token(app))
         val caps = PetStores.capabilities(app)
-        val tools = buildTools(app, store, caps)
-        val agent = AgentLoop(gateway, tools)
+        val registry = ToolRegistry(PetModules.builtin(app, store))
+        val agent = AgentLoop(gateway, registry.tools(caps))
         model = gateway
         loop = agent
         busy = true
@@ -174,7 +120,7 @@ object PetAgent {
                     applyInjected()
                     history.add(AgentMessage("user", userText))
                     HistoryTrim.trim(history, MAX_MESSAGES)
-                    agent.run(history, Prompt.system(store.all(), ZonedDateTime.now(), caps), listener)
+                    agent.run(history, Prompt.system(store.all(), ZonedDateTime.now(), caps, registry.promptHints(caps)), listener)
                 }
                 PetBus.setThenIdle(Phase.SETTLE, 1800L)
                 busy = false
