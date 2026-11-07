@@ -19,10 +19,10 @@ object Prefs {
 
     fun petY(c: Context): Int = sp(c).getInt("pet_y", -1)
 
-    /** Pet width in dp. 72 (about 64dp tall) matches a chat-head / floating bubble; the touch target stays above 48dp. */
-    const val PET_DP_DEFAULT = 72
+    /** Pet width in dp. 96 (about 85dp tall): close to the on-screen size of a launcher icon. */
+    const val PET_DP_DEFAULT = 96
     const val PET_DP_MIN = 56
-    const val PET_DP_MAX = 120
+    const val PET_DP_MAX = 160
 
     fun petWidthDp(c: Context): Int = sp(c).getInt("pet_dp", PET_DP_DEFAULT).coerceIn(PET_DP_MIN, PET_DP_MAX)
 
