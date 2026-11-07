@@ -141,7 +141,7 @@ class OverlayService : Service() {
         wm = manager
         val dm = resources.displayMetrics
         // The window has the character's own proportions, so nothing is cropped or stretched.
-        val width = (124 * dm.density).toInt()
+        val width = (Prefs.petWidthDp(this) * dm.density).toInt()
         val height = (width / MochiRenderer.ASPECT).toInt()
         val lp = WindowManager.LayoutParams(
             width, height,
