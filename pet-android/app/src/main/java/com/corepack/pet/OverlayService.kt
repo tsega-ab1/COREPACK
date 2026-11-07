@@ -20,6 +20,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.WindowManager
@@ -29,12 +30,16 @@ import com.corepack.pet.agent.ProactiveEngine
 import com.corepack.pet.mochi.MochiRenderer
 import kotlin.math.abs
 
-/** Keeps the pet floating over other apps. Drag to move, tap to chat. */
+/** Keeps the pet floating over other apps. Drag to move, tap to chat, long-press for the menu. */
 class OverlayService : Service() {
     companion object {
         const val ACTION_STOP = "com.corepack.pet.STOP"
+        const val ACTION_WAKE = "com.corepack.pet.WAKE"
         private const val CHANNEL = "pet_overlay"
+        private const val CHANNEL_HIDDEN = "pet_hidden"
         private const val NOTIF_ID = 1
+        private const val NOTIF_RESTORE = 2
+        private const val SLEEP_MS = 60 * 60 * 1000L
 
         @Volatile
         var running = false
@@ -45,6 +50,9 @@ class OverlayService : Service() {
     private var health: Thread? = null
     private var petParams: WindowManager.LayoutParams? = null
     private var bubble: BubbleWindow? = null
+    private var menu: PetMenu? = null
+    private var sleeping = false
+    private val wakeUp = Runnable { wake() }
     private var listening = false
     private val main = Handler(Looper.getMainLooper())
     private val nudges = ProactiveEngine()
@@ -67,6 +75,7 @@ class OverlayService : Service() {
     private fun say(text: String, urgent: Boolean) {
         val manager = wm ?: return
         val lp = petParams ?: return
+        if (sleeping) return
         if (urgent) PetBus.setThenIdle(Phase.ALERT, 15_000L)
         val b = bubble ?: BubbleWindow(this, manager).also { bubble = it }
         try {
@@ -93,6 +102,10 @@ class OverlayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_WAKE && pet != null) {
+            wake()
+            return START_STICKY
+        }
         startForegroundCompat()
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
@@ -103,6 +116,8 @@ class OverlayService : Service() {
             startHealth()
             startListening()
             running = true
+        } else if (sleeping) {
+            wake()
         }
         return START_STICKY
     }
@@ -110,30 +125,46 @@ class OverlayService : Service() {
     private fun chatIntent(): Intent =
         Intent(this, ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    private fun startForegroundCompat() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Pet overlay", NotificationManager.IMPORTANCE_LOW)
-        )
+    private fun buildNotification(): Notification {
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val chat = PendingIntent.getActivity(this, 1, chatIntent(), flags)
         val stop = PendingIntent.getService(
             this, 2, Intent(this, OverlayService::class.java).setAction(ACTION_STOP), flags
         )
         val stopIcon = Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel)
-        val n = Notification.Builder(this, CHANNEL)
+        val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("CorePack pet is running")
-            .setContentText("Tap the pet, or this, to chat")
+            .setContentTitle(if (sleeping) "CorePack pet is resting" else "CorePack pet is running")
+            .setContentText(if (sleeping) "Back in an hour, or tap Wake" else "Tap the pet, or this, to chat")
             .setContentIntent(chat)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(stopIcon, "Stop", stop).build())
-            .build()
+        if (sleeping) {
+            val wakePi = PendingIntent.getService(
+                this, 4, Intent(this, OverlayService::class.java).setAction(ACTION_WAKE), flags
+            )
+            val wakeIcon = Icon.createWithResource(this, android.R.drawable.ic_media_play)
+            b.addAction(Notification.Action.Builder(wakeIcon, "Wake", wakePi).build())
+        }
+        b.addAction(Notification.Action.Builder(stopIcon, "Stop", stop).build())
+        return b.build()
+    }
+
+    private fun startForegroundCompat() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "Pet overlay", NotificationManager.IMPORTANCE_LOW)
+        )
+        nm.cancel(NOTIF_RESTORE)
+        val n = buildNotification()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIF_ID, n)
         }
+    }
+
+    private fun refreshNotification() {
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
     }
 
     private fun addOverlay() {
@@ -163,6 +194,13 @@ class OverlayService : Service() {
         var startX = 0
         var startY = 0
         var moved = false
+        var longPressed = false
+        var closedMenu = false
+        val longPress = Runnable {
+            longPressed = true
+            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            showMenu()
+        }
         view.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -171,6 +209,11 @@ class OverlayService : Service() {
                     startX = lp.x
                     startY = lp.y
                     moved = false
+                    longPressed = false
+                    // A tap on the pet while the menu is open only closes the menu.
+                    closedMenu = menu?.isShowing == true
+                    menu?.dismiss()
+                    main.postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -178,6 +221,8 @@ class OverlayService : Service() {
                     val dy = e.rawY - downY
                     if (abs(dx) > slop || abs(dy) > slop) moved = true
                     if (moved) {
+                        main.removeCallbacks(longPress)
+                        menu?.dismiss()
                         lp.x = (startX + dx).toInt().coerceIn(0, dm.widthPixels - width)
                         lp.y = (startY + dy).toInt().coerceIn(0, dm.heightPixels - height)
                         manager.updateViewLayout(view, lp)
@@ -185,7 +230,12 @@ class OverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (moved) Prefs.savePetPos(this, lp.x, lp.y) else openChat()
+                    main.removeCallbacks(longPress)
+                    if (moved) Prefs.savePetPos(this, lp.x, lp.y) else if (!longPressed && !closedMenu) openChat()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    main.removeCallbacks(longPress)
                     true
                 }
                 else -> false
@@ -193,6 +243,92 @@ class OverlayService : Service() {
         }
         manager.addView(view, lp)
         pet = view
+    }
+
+    private fun showMenu() {
+        val manager = wm ?: return
+        val lp = petParams ?: return
+        bubble?.dismiss()
+        val m = menu ?: PetMenu(this, manager).also { menu = it }
+        try {
+            m.show(
+                listOf(
+                    PetMenu.Item("Chat") { openChat() },
+                    PetMenu.Item("Sleep for 1 hour") { sleepPet() },
+                    PetMenu.Item("Open app") { openApp() },
+                    PetMenu.Item("Remove pet", destructive = true) { removePet() },
+                ),
+                Rect(lp.x, lp.y, lp.x + lp.width, lp.y + lp.height),
+            )
+        } catch (e: Exception) {
+            // The overlay permission may have been withdrawn.
+        }
+    }
+
+    private fun openApp() {
+        try {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Open the app from your launcher", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Hides the pet for an hour. The notification has a Wake button. */
+    private fun sleepPet() {
+        val v = pet ?: return
+        if (sleeping) return
+        sleeping = true
+        bubble?.dismiss()
+        try {
+            wm?.removeView(v)
+        } catch (e: Exception) {
+            // already removed
+        }
+        main.postDelayed(wakeUp, SLEEP_MS)
+        refreshNotification()
+        Toast.makeText(this, "Pet is resting for an hour. Wake it from the notification.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun wake() {
+        if (!sleeping) return
+        main.removeCallbacks(wakeUp)
+        sleeping = false
+        val v = pet
+        val lp = petParams
+        if (v != null && lp != null) {
+            try {
+                wm?.addView(v, lp)
+                v.greet()
+            } catch (e: Exception) {
+                // overlay permission withdrawn
+            }
+        }
+        refreshNotification()
+    }
+
+    /** Stops the pet, and leaves a notification that brings it back with one tap. */
+    private fun removePet() {
+        menu?.dismissNow()
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_HIDDEN, "Pet removed", NotificationManager.IMPORTANCE_LOW)
+        )
+        val start = PendingIntent.getForegroundService(
+            this, 3, Intent(this, OverlayService::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        nm.notify(
+            NOTIF_RESTORE,
+            Notification.Builder(this, CHANNEL_HIDDEN)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("Pet removed")
+                .setContentText("Tap to bring it back")
+                .setContentIntent(start)
+                .setAutoCancel(true)
+                .build(),
+        )
+        Toast.makeText(this, "Pet removed. Bring it back from the notification.", Toast.LENGTH_LONG).show()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun openChat() {
@@ -236,6 +372,9 @@ class OverlayService : Service() {
         }
         bubble?.dismiss()
         bubble = null
+        menu?.dismissNow()
+        menu = null
+        main.removeCallbacks(wakeUp)
         pet?.let { v ->
             try {
                 wm?.removeView(v)

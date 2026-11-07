@@ -103,10 +103,26 @@ class MochiPose(
     val particles: List<Particle>,
     val hands: List<Hand>,
     val shadow: Float,
+    /** Glowing aura around the body: 0 = none, 1 = full. Shown while the pet is thinking or searching. */
+    val aura: Float = 0f,
+    /** Breathing of the aura, 0..1, on a [MochiAnimator.AURA_PERIOD_S] cycle. */
+    val auraPulse: Float = 0f,
+    /** Angle (radians) of the motes that orbit the aura. */
+    val auraRot: Float = 0f,
 )
 
 object MochiAnimator {
     private const val TAU = (2.0 * PI).toFloat()
+
+    /** One breath of the aura, in seconds (matches the thinking cycle of the reference design). */
+    const val AURA_PERIOD_S = 1.4f
+
+    /** How strong the aura is in [state]: full while thinking, softer while a tool runs, none otherwise. */
+    fun auraFor(state: MochiState): Float = when (state) {
+        MochiState.THINKING -> 1f
+        MochiState.SEARCHING -> 0.65f
+        else -> 0f
+    }
 
     private fun hash(i: Int, salt: Int = 0): Float {
         val x = sin((i * 12.9898 + salt * 78.233)) * 43758.5453
@@ -221,6 +237,9 @@ object MochiAnimator {
             sx = sx, sy = sy, dx = dx, dy = dy, rot = rot, eyes = eyes, badge = badge,
             particles = particles(state, tIn, now), hands = hands(state, tIn, now),
             shadow = (1f - shadowLift / 70f).coerceIn(0.6f, 1.1f),
+            aura = auraFor(state),
+            auraPulse = 0.5f + 0.5f * sin(TAU * now / AURA_PERIOD_S),
+            auraRot = 1.1f * now,
         )
     }
 
@@ -335,6 +354,7 @@ class MochiPlayer {
             Colors.lerp(a.top, b.top, k), Colors.lerp(a.bottom, b.bottom, k), Colors.lerp(a.glow, b.glow, k), f(a.glowAlpha, b.glowAlpha),
             f(a.blush, b.blush), f(a.sx, b.sx), f(a.sy, b.sy), f(a.dx, b.dx), f(a.dy, b.dy), f(a.rot, b.rot),
             eyes, badge, b.particles, b.hands, f(a.shadow, b.shadow),
+            aura = f(a.aura, b.aura), auraPulse = b.auraPulse, auraRot = b.auraRot,
         )
     }
 

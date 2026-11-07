@@ -172,6 +172,45 @@ fun main() {
         check("ellipse path is 1 move + 4 curves + close", ShapePath.ellipse(0f, 0f, 1f, 1f).ops.size == 6)
     }
 
+    // ---- the thinking aura
+    run {
+        val auras = MochiState.entries.associateWith { MochiAnimator.pose(it, 1f, 5f).aura }
+        check("aura is full while thinking, softer while searching, absent in every other state",
+            auras[MochiState.THINKING] == 1f && auras[MochiState.SEARCHING]!! in 0.3f..0.9f && auras.filterKeys { it != MochiState.THINKING && it != MochiState.SEARCHING }.values.all { it == 0f })
+        val period = MochiAnimator.AURA_PERIOD_S
+        val pulses = (0 until 200).map { MochiAnimator.pose(MochiState.THINKING, 1f, it * period / 100f).auraPulse }
+        check("aura breathes between 0 and 1", pulses.min() < 0.02f && pulses.max() > 0.98f && pulses.all { it in 0f..1f })
+        check("aura breathes with the 1.4 s cycle", abs(MochiAnimator.pose(MochiState.THINKING, 1f, 3.3f).auraPulse - MochiAnimator.pose(MochiState.THINKING, 1f, 3.3f + period).auraPulse) < 1e-3f)
+        val pl = MochiPlayer(); pl.setBase(MochiState.IDLE, 0); pl.frame(1_000)
+        pl.setBase(MochiState.THINKING, 10_000)
+        val start = pl.frame(10_000).aura; val mid = pl.frame(10_175).aura; val full = pl.frame(10_500).aura
+        check("aura fades in with the state change (not a cut)", start < 0.05f && mid > 0.2f && mid < 0.8f && full == 1f, "start $start mid $mid full $full")
+        pl.setBase(MochiState.IDLE, 20_000)
+        check("aura fades out when thinking ends", pl.frame(20_150).aura in 0.05f..0.95f && pl.frame(20_500).aura == 0f)
+        class Box : Gfx {
+            var sx = 1f; var sy = 1f; var tx = 0f; var ty = 0f; var maxX = 0f; var maxDown = 0f; var first = true
+            val stack = ArrayList<FloatArray>()
+            override fun save() { stack.add(floatArrayOf(sx, sy, tx, ty)) }
+            override fun restore() { stack.removeAt(stack.size - 1).let { sx = it[0]; sy = it[1]; tx = it[2]; ty = it[3] } }
+            override fun translate(dx: Float, dy: Float) { tx += dx * sx; ty += dy * sy }
+            override fun rotate(deg: Float) {}
+            override fun scale(sx: Float, sy: Float) { this.sx *= sx; this.sy *= sy }
+            override fun clip(path: ShapePath) {}
+            override fun fill(path: ShapePath, fill: Fill, alpha: Float) {
+                // the first radial fill of a frame is the aura halo (it is drawn before the ordinary glow)
+                if (fill is Fill.Radial && first) { first = false; maxX = maxOf(maxX, kotlin.math.abs(tx - 170f) + sx); maxDown = maxOf(maxDown, ty + sy) }
+            }
+            override fun stroke(path: ShapePath, width: Float, argb: Int, alpha: Float) {}
+        }
+        val box = Box()
+        for (t in 0 until 40) { box.first = true; MochiRenderer.draw(box, MochiAnimator.pose(MochiState.THINKING, 2f, t * 0.07f), 340f, 300f) }
+        check("aura halo stays inside the 340 x 300 stage (so the pet window never clips it)", box.maxX in 100f..170.5f && box.maxDown in 100f..300.5f, "x ${box.maxX} down ${box.maxDown}")
+        val gone = RecGfx(); MochiRenderer.draw(gone, MochiAnimator.pose(MochiState.IDLE, 1f, 5f), 372f, 328f)
+        val on = RecGfx(); MochiRenderer.draw(on, MochiAnimator.pose(MochiState.THINKING, 1f, 5f), 372f, 328f)
+        check("aura adds only 5 draw calls and stays balanced and finite", on.fills + on.strokes - (RecGfx().also { MochiRenderer.draw(it, MochiAnimator.pose(MochiState.WORKING, 1f, 5f), 372f, 328f) }.let { it.fills + it.strokes }) <= 6 && on.depth == 0 && on.bad == 0 && gone.depth == 0,
+            "${on.fills + on.strokes} vs idle ${gone.fills + gone.strokes}")
+    }
+
     // ---- colour helpers
     run {
         check("lerp endpoints", Colors.lerp(0xFF102030.toInt(), 0xFF807060.toInt(), 0f) == 0xFF102030.toInt() && Colors.lerp(0xFF102030.toInt(), 0xFF807060.toInt(), 1f) == 0xFF807060.toInt())

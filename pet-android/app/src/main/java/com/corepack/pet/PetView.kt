@@ -30,6 +30,12 @@ class PetView(context: Context) : View(context) {
         invalidate()
     }
 
+    /** Waves hello again (used when the pet wakes up). */
+    fun greet() {
+        player.playOnce(MochiState.GREETING, SystemClock.uptimeMillis(), GREETING_MS)
+        invalidate()
+    }
+
     override fun onDetachedFromWindow() {
         PetBus.unlisten(listener)
         super.onDetachedFromWindow()

@@ -74,12 +74,58 @@ object MochiRenderer {
         g.scale(s, s)
         g.translate(0f, 25f) // origin = body centre
 
+        drawAura(g, p)
         drawGlow(g, p)
         drawShadow(g, p)
         for (h in p.hands) drawHand(g, p, h)
         drawBody(g, p)
         for (q in p.particles) drawParticle(g, q)
         g.restore()
+    }
+
+    /**
+     * The thinking aura: a soft halo that breathes, a thin rim just outside the body, and three motes
+     * that orbit it. Radial gradients only (no blur), so it is cheap and works on every Android version.
+     * It is drawn behind the body, so the inside of the halo is left clear.
+     */
+    private fun drawAura(g: Gfx, p: MochiPose) {
+        val k = p.aura
+        if (k <= 0.01f) return
+        val breathe = 0.82f + 0.18f * p.auraPulse
+        g.save()
+        // Must stay inside the stage (340 x 300, body centre 25 px low) or the pet window clips it:
+        // at most 170 px sideways and 125 px downwards from the body centre.
+        g.scale(158f + 8f * p.auraPulse, 122f + 3f * p.auraPulse)
+        g.fill(
+            UNIT_CIRCLE,
+            Fill.Radial(0f, 0f, 1f, listOf(
+                0f to Colors.withAlpha(p.glow, 0f), 0.64f to Colors.withAlpha(p.glow, 0f),
+                0.74f to Colors.withAlpha(p.glow, 0.5f * k * breathe), 0.87f to Colors.withAlpha(p.glow, 0.2f * k * breathe),
+                1f to Colors.withAlpha(p.glow, 0f),
+            )),
+        )
+        g.restore()
+
+        g.save()
+        val s = 1.075f + 0.025f * p.auraPulse
+        g.scale(s, s)
+        g.stroke(BODY, 2.4f, p.glow, 0.55f * k)
+        g.restore()
+
+        for (i in 0 until 3) {
+            val ang = p.auraRot + i * 2.0944f
+            val tw = 0.75f + 0.25f * sin(ang * 2.3f + i)
+            g.save()
+            g.translate((A + 24f) * cos(ang), (B + 24f) * sin(ang))
+            g.scale(8f * tw, 8f * tw)
+            g.fill(
+                UNIT_CIRCLE,
+                Fill.Radial(0f, 0f, 1f, listOf(
+                    0f to Colors.withAlpha(WHITE, 0.95f * k), 0.35f to Colors.withAlpha(p.glow, 0.8f * k), 1f to Colors.withAlpha(p.glow, 0f),
+                )),
+            )
+            g.restore()
+        }
     }
 
     private fun drawGlow(g: Gfx, p: MochiPose) {
