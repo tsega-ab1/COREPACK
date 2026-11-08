@@ -172,6 +172,8 @@ def cmd_mcp(args) -> int:
             env[k] = v
         allow = ["*"] if args.allow_all else [t.strip() for t in (args.allow or "").split(",") if t.strip()]
         spec = {"command": words[0], "args": words[1:], "env": env, "allow": allow, "confirm": args.confirm}
+        if args.startup_timeout:
+            spec["startup_timeout"] = args.startup_timeout
         existed = args.name in servers
         servers[args.name] = spec
         cfg["mcp_servers"] = servers
@@ -317,7 +319,8 @@ def cmd_start(args) -> int:
     if cfg.get("fallbacks"):
         ui.ok(f"Backup   {len(cfg['fallbacks'])} engine(s) ready if the main one fails")
     if _mcp_servers(cfg):
-        ui.ok("Tools    " + ", ".join(_mcp_servers(cfg)) + "  (started the first time the phone asks)")
+        ui.ok("Tools    " + ", ".join(_mcp_servers(cfg)) + "  (starting in the background; the first run may download them)")
+        srv.mcp.warm()
     if host not in ("127.0.0.1", "localhost", "::1"):
         for ip in lan_addresses():
             ui.ok(f"Wi-Fi    http://{ip}:{port}/v1   {pairing_uri(f'http://{ip}:{port}/v1', cfg['token'])}")
@@ -374,6 +377,8 @@ def add_parsers(sub) -> None:
     ma.add_argument("name")
     ma.add_argument("--allow", help="comma-separated tool names the pet may use")
     ma.add_argument("--allow-all", action="store_true", help="let the pet use every tool this server offers")
+    ma.add_argument("--startup-timeout", type=float, metavar="SECONDS",
+                    help="how long to wait for the server to start (default 60); raise it on a slow connection")
     ma.add_argument("--confirm", choices=["auto", "always", "never"], default="auto",
                     help="when the phone should ask first: auto = for tools that are not read-only")
     ma.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",

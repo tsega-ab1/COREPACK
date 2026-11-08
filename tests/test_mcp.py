@@ -115,16 +115,61 @@ class ClientTests(unittest.TestCase):
 
 
 class HelperTests(unittest.TestCase):
-    def test_schema_cleaning_drops_only_what_engines_reject(self):
+    def test_schema_cleaning_keeps_property_names_and_the_basics(self):
         s = {"$schema": "x", "type": "object", "additionalProperties": False,
-             "properties": {"title": {"type": "string", "additionalProperties": False},
+             "properties": {"title": {"type": "string", "description": "a  title\n here", "additionalProperties": False},
                             "nested": {"type": "object", "properties": {"$defs": {"type": "number"}}, "additionalProperties": False}},
              "required": ["title"]}
+        self.assertEqual(clean_schema(s), {
+            "type": "object",
+            "properties": {"title": {"type": "string", "description": "a title here"},
+                           "nested": {"type": "object", "properties": {"$defs": {"type": "number"}}}},
+            "required": ["title"]})
+
+    def test_schema_cleaning_removes_what_gemini_refuses(self):
+        # shaped like the schema of the Fetch server, written by pydantic
+        s = {"type": "object", "properties": {
+            "url": {"type": "string", "format": "uri", "minLength": 1, "description": "URL to fetch"},
+            "max_length": {"type": "integer", "default": 5000, "exclusiveMaximum": 1000000, "exclusiveMinimum": 0, "description": "Maximum characters"},
+            "raw": {"type": "boolean", "default": False},
+            "start_index": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}], "description": "Where to start"}},
+            "required": ["url", "missing_property"]}
         out = clean_schema(s)
-        self.assertEqual(out, {"type": "object",
-                               "properties": {"title": {"type": "string"},
-                                              "nested": {"type": "object", "properties": {"$defs": {"type": "number"}}}},
-                               "required": ["title"]})
+        text = json.dumps(out)
+        for banned in ("format", "minLength", "exclusiveMaximum", "exclusiveMinimum", "default", "minimum", "anyOf", "null"):
+            self.assertNotIn(banned, text)
+        self.assertEqual(out["properties"]["url"], {"type": "string", "description": "URL to fetch"})
+        self.assertEqual(out["properties"]["start_index"], {"type": "integer", "description": "Where to start"})
+        self.assertEqual(out["required"], ["url"], "a required name that is not a property is dropped")
+
+    def test_schema_cleaning_resolves_references_and_odd_types(self):
+        s = {"$defs": {"Mode": {"type": "string", "enum": ["fast", "slow"]}},
+             "type": "object", "properties": {
+                 "mode": {"$ref": "#/$defs/Mode", "description": "which one"},
+                 "maybe": {"type": ["string", "null"]},
+                 "level": {"type": "integer", "enum": [1, 2, 3]},
+                 "kind": {"const": "text"},
+                 "tags": {"type": "array"},
+                 "untyped": {},
+                 "gone": {"$ref": "#/$defs/DoesNotExist"}}}
+        p = clean_schema(s)["properties"]
+        self.assertEqual(p["mode"], {"type": "string", "enum": ["fast", "slow"], "description": "which one"})
+        self.assertEqual(p["maybe"], {"type": "string"})
+        self.assertEqual(p["level"], {"type": "integer", "description": "One of: 1, 2, 3"})
+        self.assertEqual(p["kind"], {"type": "string", "enum": ["text"]})
+        self.assertEqual(p["tags"], {"type": "array", "items": {"type": "string"}})
+        self.assertEqual(p["untyped"], {"type": "string"})
+        self.assertEqual(p["gone"], {"type": "string"})
+        self.assertNotIn("$defs", json.dumps(clean_schema(s)))
+
+    def test_a_tool_without_a_schema_gets_an_empty_object_schema(self):
+        self.assertEqual(clean_schema(None), {"type": "object", "properties": {}})
+        self.assertEqual(clean_schema({}), {"type": "object", "properties": {}})
+
+    def test_a_self_referencing_schema_cannot_loop_forever(self):
+        s = {"$defs": {"Node": {"type": "object", "properties": {"next": {"$ref": "#/$defs/Node"}}}},
+             "type": "object", "properties": {"head": {"$ref": "#/$defs/Node"}}}
+        self.assertIn("head", clean_schema(s)["properties"])
 
     def test_public_names_are_valid_function_names(self):
         for server, tool in [("fake", "echo"), ("my server!", "weird name!"), ("a" * 40, "b" * 40)]:
@@ -243,6 +288,54 @@ class HostTests(unittest.TestCase):
         proc = h._clients["fake"]._proc
         h.close()
         self.assertIsNotNone(proc.poll())
+
+    def test_warm_up_starts_servers_without_making_anyone_wait(self):
+        h = self.make({"slow": spec("--init-delay=1.5"), "fast": spec(allow=["echo"])})
+        threads = h.warm()
+        deadline = time.monotonic() + 10
+        while "fast" not in h._clients and time.monotonic() < deadline:
+            time.sleep(0.05)
+        t0 = time.monotonic()
+        names = [t["name"] for t in h.tools()]
+        self.assertLess(time.monotonic() - t0, 1.0, "a listing must not wait for the slow server")
+        self.assertEqual(names, ["fast__echo"])
+        self.assertIn("still starting", h.errors["slow"])
+        for t in threads:
+            t.join(15)
+        self.assertIn("slow__echo", [t["name"] for t in h.tools()], "once it is up, its tools appear")
+        self.assertNotIn("slow", h.errors)
+
+    def test_a_failed_start_is_not_retried_on_every_listing(self):
+        with tempfile.TemporaryDirectory() as d:
+            counter = os.path.join(d, "launches")
+            h = self.make({"bad": spec("--exit-at-start", f"--count-file={counter}")})
+            for _ in range(3):
+                self.assertEqual(h.tools(), [])
+            with open(counter) as f:
+                launches = len(f.read().split())
+            self.assertEqual(launches, 1, "the broken server was started once, not three times")
+            self.assertIn("exited", h.errors["bad"])
+
+    def test_a_call_may_retry_a_server_that_failed_before(self):
+        with tempfile.TemporaryDirectory() as d:
+            h = self.make({"fake": spec(allow=["echo"])})
+            h.tools()
+            h._failed["fake"] = (time.monotonic(), "pretend the last start failed")
+            self.assertEqual(h.call("fake__echo", {"text": "hi"})["text"], "echo: hi", "a call is something the person is waiting for")
+
+    def test_the_start_timeout_comes_from_the_config(self):
+        h = self.make({"slow": spec("--init-delay=3", startup_timeout=0.5)})
+        self.assertEqual(h.tools(), [])
+        self.assertIn("timed out after 0.5 s", h.errors["slow"])
+
+    def test_closing_during_warm_up_leaves_nothing_running(self):
+        h = self.make({"slow": spec("--init-delay=1")})
+        threads = h.warm()
+        time.sleep(0.3)
+        h.close()
+        for t in threads:
+            t.join(15)
+        self.assertEqual(h._clients, {})
 
     def test_status_needs_no_process(self):
         h = self.make({"a": spec(allow=["echo"]), "b": spec(allow=[]), "c": {"command": "definitely-not-installed-xyz", "allow": ["*"]}})
@@ -374,6 +467,12 @@ class CommandTests(unittest.TestCase):
         self.assertEqual((s["allow"], s["confirm"], s["command"], s["args"]), (["x", "y"], "never", "prog", []))
         self.run_cmd("add", "--allow-all", "b", "--", "prog", "-y", "pkg")
         self.assertEqual(gateway.load_file()["mcp_servers"]["b"]["allow"], ["*"])
+
+    def test_a_start_timeout_can_be_set(self):
+        self.run_cmd("add", "--startup-timeout", "120", "slowpoke", "--", "prog")
+        self.assertEqual(gateway.load_file()["mcp_servers"]["slowpoke"]["startup_timeout"], 120.0)
+        self.run_cmd("add", "normal", "--", "prog")
+        self.assertNotIn("startup_timeout", gateway.load_file()["mcp_servers"]["normal"])
 
     def test_bad_input_is_refused(self):
         self.assertEqual(self.run_cmd("add", "bad name!", "--", "prog")[0], 1)

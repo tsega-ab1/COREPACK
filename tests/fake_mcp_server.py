@@ -8,6 +8,12 @@ FLAGS = dict(a.lstrip("-").split("=", 1) if "=" in a else (a.lstrip("-"), "1") f
 VERSION = FLAGS.get("version", "2025-11-25")
 PAGE = int(FLAGS.get("page-size", "0"))
 
+if "count-file" in FLAGS:                        # one line per launch, to count how often the host starts us
+    with open(FLAGS["count-file"], "a") as f:
+        f.write("started\n")
+if "exit-at-start" in FLAGS:
+    sys.exit(1)
+
 OBJ = {"type": "object", "properties": {}}
 TOOLS = [
     {"name": "echo", "description": "Echo the text back", "annotations": {"readOnlyHint": True},
@@ -75,6 +81,7 @@ for line in sys.stdin:
         continue
     method, rid = msg.get("method"), msg.get("id")
     if method == "initialize":
+        time.sleep(float(FLAGS.get("init-delay", "0")))
         send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": True}},
                                                      "serverInfo": {"name": "fake", "version": "1"}}})
     elif method == "tools/list":

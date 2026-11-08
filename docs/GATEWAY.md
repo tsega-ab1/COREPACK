@@ -111,9 +111,15 @@ The safety rules:
   `--confirm always` flags every tool, `--confirm never` none.
 - A tool server only sees a short list of ordinary variables (PATH, HOME, proxies) plus the ones you give it with
   `--env`. It never sees the gateway's own API keys.
+- Each tool's argument schema is reduced to the common subset every engine accepts (type, description, enum,
+  properties, required, items), because engines such as Gemini refuse keywords like `format: uri` or `$ref`.
 - Results are cut at `mcp_max_result` characters (default 4000) and calls time out after `mcp_timeout` seconds
   (default 30). Tool descriptions and results come from the server, so only add servers you trust.
-- Servers start the first time the phone asks, are restarted if they crash, and stop when the gateway stops.
+- Servers start in the background when the gateway starts, are restarted if they crash, and stop when the gateway
+  stops. A server that is still starting (the first run can download it) or that failed to start is left out of the
+  list and explained under `errors`; a failed start is not retried more than once a minute. On a slow connection,
+  give it longer with `--startup-timeout 180`, or run it once yourself first so it is cached, for example
+  `uvx mcp-server-fetch < /dev/null`.
 
 What the phone uses, both behind the same token as chat:
 
