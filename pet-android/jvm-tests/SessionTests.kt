@@ -210,6 +210,22 @@ fun main() {
         check("trailing whitespace does not matter", streamed.leftToShow("Hi there") == "")
     }
 
+    // ================= tools are looked up when the turn runs, not when it is armed
+    run {
+        val armedOn = Thread.currentThread()
+        var askedOn: Thread? = null
+        val s = AgentSession()
+        s.arm(script(say("ok"))) {
+            askedOn = Thread.currentThread()
+            emptyList()
+        }
+        check("tools are not looked up while arming", askedOn == null)
+        val runner = Thread { s.run("hi", { "SYS" }, Quiet) }
+        runner.start()
+        runner.join()
+        check("they are looked up on the thread that runs the turn", askedOn != null && askedOn != armedOn, askedOn.toString())
+    }
+
     // ================= misuse
     run {
         var thrown = false

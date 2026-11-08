@@ -44,6 +44,7 @@ compile assist "$AGENT"/*.kt "$HERE/AssistantTests.kt"
 compile modules "$AGENT"/*.kt "$HERE/ModuleTests.kt"
 compile session "$AGENT"/*.kt "$HERE/SessionTests.kt"
 compile paced "$AGENT"/*.kt "$HERE/PacedTests.kt"
+compile remote "$AGENT"/*.kt "$HERE/RemoteToolTests.kt"
 compile mochi "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/mochi/*.kt "$HERE/MochiTests.kt"
 compile e2e "$AGENT"/*.kt "$HERE/E2E.kt"
 
@@ -61,6 +62,9 @@ java -cp "$OUT/session:$CP" SessionTestsKt
 
 echo "== paced reply tests"
 java -cp "$OUT/paced:$CP" PacedTestsKt
+
+echo "== online (gateway) tool tests"
+java -cp "$OUT/remote:$CP" RemoteToolTestsKt
 
 echo "== mochi character tests"
 java -cp "$OUT/mochi:$CP" MochiTestsKt

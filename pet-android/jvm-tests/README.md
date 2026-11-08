@@ -14,6 +14,8 @@ They are plain Kotlin programs that print PASS or FAIL, not Gradle tests.
 - `SessionTests.kt`: `AgentSession`, the conversation itself: history carry-over, reminders folded in between
   messages, cleanup after a failed turn, trimming, cancelling, and a tool round trip, with a scripted fake model.
 - `PacedTests.kt`: `PacedSink`, which releases a reply in readable slices: order, Stop, pace, end-of-reply hook.
+- `RemoteToolTests.kt`: tools that run on the PC through the gateway: the HTTP client (against a fake gateway running inside the test),
+  approval, caching, the on/off switch and a whole turn that uses one.
 - `MochiTests.kt`: the character: phase/mood mapping, palette, motion against the measured timings
   (dance beat, still bodies, breathing, blinking), cross-fades, one-off expressions, and a render
   sanity check of every state.

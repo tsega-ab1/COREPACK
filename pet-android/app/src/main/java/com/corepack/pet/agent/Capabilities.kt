@@ -6,10 +6,12 @@ enum class Capability(val label: String, val blurb: String) {
     TASKS_NOTES("Tasks and notes", "A to-do list and a notebook kept on this phone"),
     PHONE_ACTIONS("Phone actions", "Open apps, set alarms and timers, maps, links, flashlight, draft texts (you press send or call)"),
     LOOKUPS("Weather and facts", "Looks up weather (Open-Meteo) and summaries (Wikipedia); the question is sent to those sites"),
-    NUDGES("Nudges", "The pet speaks up by itself, for example when the battery is low");
+    NUDGES("Nudges", "The pet speaks up by itself, for example when the battery is low"),
+    REMOTE_TOOLS("Online tools", "Tools that run on your PC through the gateway, such as fetching web pages. What they return comes from outside, so the pet treats it with suspicion");
 
     companion object {
-        val defaults: Set<Capability> = entries.toSet()
+        /** What a new install starts with. Online tools stay off until you switch them on, even after allowing tools on the PC. */
+        val defaults: Set<Capability> = entries.toSet() - REMOTE_TOOLS
 
         fun parse(stored: String?): Set<Capability> {
             if (stored == null) return defaults

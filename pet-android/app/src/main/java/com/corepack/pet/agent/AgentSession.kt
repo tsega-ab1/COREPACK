@@ -17,6 +17,12 @@ class AgentSession(private val maxMessages: Int = 40) {
     @Volatile
     private var model: Model? = null
 
+    @Volatile
+    private var toolsProvider: (() -> List<Tool>)? = null
+
+    @Volatile
+    private var cancelRequested = false
+
     /** Something the pet said by itself. It joins the history at the start of the next message. Never blocks. */
     fun inject(text: String) {
         pendingInjected.add(text)
@@ -30,8 +36,18 @@ class AgentSession(private val maxMessages: Int = 40) {
      * the thread that handles the tap, before [run] starts on another thread.
      */
     fun arm(model: Model, tools: List<Tool>) {
+        arm(model) { tools }
+    }
+
+    /**
+     * Like [arm], but the tools are looked up when [run] starts, on the thread that runs the turn. That is where
+     * tools that fetch their list over the network belong; the thread that handles the tap must not wait for a network.
+     */
+    fun arm(model: Model, tools: () -> List<Tool>) {
         this.model = model
-        this.loop = AgentLoop(model, tools)
+        this.toolsProvider = tools
+        this.loop = null
+        this.cancelRequested = false
     }
 
     /**
@@ -40,7 +56,12 @@ class AgentSession(private val maxMessages: Int = 40) {
      * the exception is thrown on.
      */
     fun run(userText: String, system: () -> String, listener: AgentLoop.Listener): String {
-        val agent = loop ?: throw IllegalStateException("arm() must be called before run()")
+        val provider = toolsProvider
+        val armed = model
+        if (provider == null || armed == null) throw IllegalStateException("arm() must be called before run()")
+        val agent = AgentLoop(armed, provider())
+        loop = agent
+        if (cancelRequested) agent.cancelled = true     // Stop was pressed before the loop existed
         try {
             return synchronized(history) {
                 applyInjected()
@@ -55,6 +76,7 @@ class AgentSession(private val maxMessages: Int = 40) {
     }
 
     fun cancel() {
+        cancelRequested = true
         loop?.cancelled = true
         model?.cancel()
     }

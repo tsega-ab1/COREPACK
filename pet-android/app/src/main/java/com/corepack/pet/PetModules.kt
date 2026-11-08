@@ -7,11 +7,13 @@ import com.corepack.pet.agent.CancelReminderTool
 import com.corepack.pet.agent.Capability
 import com.corepack.pet.agent.CompleteTaskTool
 import com.corepack.pet.agent.FactStore
+import com.corepack.pet.agent.HttpToolGateway
 import com.corepack.pet.agent.ForgetTool
 import com.corepack.pet.agent.ListRemindersTool
 import com.corepack.pet.agent.ListTasksTool
 import com.corepack.pet.agent.MoodTool
 import com.corepack.pet.agent.RememberTool
+import com.corepack.pet.agent.RemoteToolsModule
 import com.corepack.pet.agent.SaveNoteTool
 import com.corepack.pet.agent.SearchNotesTool
 import com.corepack.pet.agent.SetReminderTool
@@ -27,12 +29,25 @@ import com.corepack.pet.agent.WikiTool
  * add it to the list in [builtin]. Nothing else needs to change.
  */
 object PetModules {
+    // One instance for the whole app, so the list of online tools is remembered between messages.
+    private var remote: RemoteToolsModule? = null
+
+    @Synchronized
+    private fun remote(app: Context): RemoteToolsModule {
+        val appContext = app.applicationContext
+        return remote ?: RemoteToolsModule(
+            HttpToolGateway({ Prefs.baseUrl(appContext) }, { Prefs.token(appContext) }),
+            { PetAgent.toolConfirmer },
+        ).also { remote = it }
+    }
+
     fun builtin(app: Context, store: FactStore): List<ToolModule> = listOf(
         CoreModule(app, store),
         RemindersModule(app),
         TasksNotesModule(app),
         PhoneActionsModule(app),
         LookupsModule(),
+        remote(app),
     )
 }
 

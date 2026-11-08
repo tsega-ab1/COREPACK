@@ -10,6 +10,7 @@ import com.corepack.pet.agent.ModelException
 import com.corepack.pet.agent.PacedSink
 import com.corepack.pet.agent.Prompt
 import com.corepack.pet.agent.ReplySink
+import com.corepack.pet.agent.ToolConfirmer
 import com.corepack.pet.agent.StreamedText
 import com.corepack.pet.agent.ToolModule
 import com.corepack.pet.agent.ToolRegistry
@@ -38,6 +39,13 @@ object PetAgent {
 
     @Volatile
     var moduleFactory: (Context, FactStore) -> List<ToolModule> = { app, store -> PetModules.builtin(app, store) }
+
+    /**
+     * Asks the user before an online tool that is not read-only runs. Until the screen sets one, such tools are
+     * not offered to the model at all. It is called on a background thread and may block until the user answers.
+     */
+    @Volatile
+    var toolConfirmer: ToolConfirmer? = null
 
     private val session = AgentSession(MAX_MESSAGES)
     private var facts: FactStore? = null
@@ -75,7 +83,7 @@ object PetAgent {
         val store = facts(app)
         val caps = PetStores.capabilities(app)
         val registry = ToolRegistry(moduleFactory(app, store))
-        session.arm(modelFactory(app), registry.tools(caps))
+        session.arm(modelFactory(app)) { registry.tools(caps) }
         busy = true
 
         // Everything the chat hears goes through the pacer; it clears [busy] just before the final event.
