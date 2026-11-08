@@ -79,6 +79,51 @@ corepack gateway fallback clear
   own Retry-After instead. With no backup there is nowhere else to go, so the engine is simply tried again.
 - A bad request (400) is about that one request, so it never benches an engine.
 
+## Tools (MCP)
+
+The gateway can host MCP servers (the standard way to give an AI model tools such as web fetching or a knowledge
+graph) and offer their tools to the phone. The phone never talks to a tool server itself: it asks the gateway for
+a list and asks it to run one, so the servers and their API keys stay on this PC.
+
+```
+corepack gateway mcp add [options] NAME -- COMMAND [ARGS...]    # options go before the name
+corepack gateway mcp tools NAME      # start it and show what it offers (first run may download it)
+corepack gateway mcp allow NAME TOOL [TOOL...]     # or --all / --none
+corepack gateway mcp list
+corepack gateway mcp remove NAME
+```
+
+For example, with Node installed:
+
+```
+corepack gateway mcp add memory -- npx -y @modelcontextprotocol/server-memory
+corepack gateway mcp tools memory
+corepack gateway mcp allow memory read_graph search_nodes
+```
+
+Servers that need a key take it from your shell, so it is not written into the settings file:
+`corepack gateway mcp add --env 'SOME_API_KEY=$SOME_API_KEY' NAME -- COMMAND ...`.
+
+The safety rules:
+
+- A server's tools are hidden until you allow them with `--allow`, `mcp allow` or `--allow-all`.
+- Tools that are not marked read-only are flagged `needs_confirm`, so the phone can ask before running them.
+  `--confirm always` flags every tool, `--confirm never` none.
+- A tool server only sees a short list of ordinary variables (PATH, HOME, proxies) plus the ones you give it with
+  `--env`. It never sees the gateway's own API keys.
+- Results are cut at `mcp_max_result` characters (default 4000) and calls time out after `mcp_timeout` seconds
+  (default 30). Tool descriptions and results come from the server, so only add servers you trust.
+- Servers start the first time the phone asks, are restarted if they crash, and stop when the gateway stops.
+
+What the phone uses, both behind the same token as chat:
+
+| Request | Answer |
+|---|---|
+| `GET /v1/tools` | `{"tools": [{"name", "server", "description", "parameters", "needs_confirm"}], "errors": {"server": "why it is not working"}}` |
+| `POST /v1/tools/call` with `{"name": "server__tool", "arguments": {...}}` | `{"ok": true, "text": "..."}`; an unknown or not-allowed tool is a 404, a server that failed a 502 |
+
+`corepack gateway doctor` lists each tool server and whether its program is installed, without starting it.
+
 ## Safety
 
 - Listens on `127.0.0.1` only by default. `--host 0.0.0.0` exposes it to the network; the token is
@@ -98,6 +143,8 @@ name, so `from corepack import gateway` keeps working. Each module only imports 
 | `ratelimit.py` | The per-minute limiter |
 | `upstream.py` | Talking to the engine: main plus backups, failover, rate-limit handling |
 | `gateway_server.py` | The HTTP handler: token check, chat requests, streaming |
+| `mcp_client.py` | A small MCP client for tool servers that run as child processes |
+| `mcp_host.py` | Starts the tool servers, applies the allow list, and cleans up names, schemas and results |
 | `adb.py` | Reading `adb` output and `adb reverse` for the USB cable |
 | `pairing.py` | Pairing codes and the PC's Wi-Fi addresses |
 | `gateway_doctor.py` | The checks behind `gateway doctor` |

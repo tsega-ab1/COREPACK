@@ -1,9 +1,11 @@
 """The `corepack gateway ...` commands."""
 from __future__ import annotations
 
+import argparse
 import getpass
 import json
 import os
+import re
 import secrets
 import time
 
@@ -15,6 +17,8 @@ from .gateway_server import make_server
 from .adb import adb_reverse
 from .pairing import lan_addresses, pairing_uri
 from .gateway_doctor import doctor_verdict, run_doctor
+from .mcp_client import McpError
+from .mcp_host import McpHost
 
 
 def cmd_init(args) -> int:
@@ -126,6 +130,101 @@ def cmd_fallback(args) -> int:
     return 0
 
 
+def _mcp_servers(cfg: dict) -> dict:
+    raw = cfg.get("mcp_servers")
+    return raw if isinstance(raw, dict) else {}
+
+
+def cmd_mcp(args) -> int:
+    cfg = load_file()
+    servers = _mcp_servers(cfg)
+    cmd = args.mcp_cmd
+    if cmd == "list" or cmd is None:
+        if not servers:
+            ui.info("No tool servers. Add one with: corepack gateway mcp add [--allow TOOL,TOOL] NAME -- COMMAND ARGS...")
+        for name, s in servers.items():
+            allow = s.get("allow") or []
+            shown = "all tools" if "*" in allow else (", ".join(allow) if allow else "none yet (tools stay hidden until you allow them)")
+            print(f"   {name}: {s.get('command', '?')} {' '.join(str(a) for a in s.get('args') or [])}".rstrip())
+            env = ", ".join((s.get("env") or {}).keys())
+            print(f"      allows: {shown}   confirm: {s.get('confirm', 'auto')}" + (f"   env: {env}" if env else ""))
+        return 0
+    if cmd == "add":
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,30}", args.name):
+            ui.fail("The name may use letters, digits and dashes only (up to 30 characters)")
+            return 1
+        words = list(args.command_words or [])
+        if words[:1] == ["--"]:
+            words = words[1:]
+        if words[:1] and words[0].startswith("-"):
+            ui.fail("Put the options before the name, then -- and the command: "
+                    "corepack gateway mcp add [--allow TOOL,TOOL] NAME -- COMMAND ARGS...")
+            return 1
+        if not words:
+            ui.fail("Say how to start the server after --, for example: -- npx -y @scope/some-mcp-server")
+            return 1
+        env = {}
+        for item in args.env or []:
+            if "=" not in item:
+                ui.fail(f"--env wants KEY=VALUE, got {item!r}")
+                return 1
+            k, v = item.split("=", 1)
+            env[k] = v
+        allow = ["*"] if args.allow_all else [t.strip() for t in (args.allow or "").split(",") if t.strip()]
+        spec = {"command": words[0], "args": words[1:], "env": env, "allow": allow, "confirm": args.confirm}
+        existed = args.name in servers
+        servers[args.name] = spec
+        cfg["mcp_servers"] = servers
+        save(cfg)
+        ui.ok(("Updated" if existed else "Added") + f" tool server {args.name}")
+        if not allow:
+            ui.hint(f"No tools are allowed yet. See what it offers with: corepack gateway mcp tools {args.name}")
+            ui.hint(f"Then allow some with: corepack gateway mcp allow {args.name} TOOL [TOOL...]")
+        else:
+            ui.hint("Restart the gateway for the change to reach the phone.")
+        return 0
+    name = getattr(args, "name", None)
+    if name not in servers:
+        ui.fail(f"No tool server called {name!r}. See: corepack gateway mcp list")
+        return 1
+    if cmd == "remove":
+        del servers[name]
+        cfg["mcp_servers"] = servers
+        save(cfg)
+        ui.ok(f"Removed tool server {name}")
+        return 0
+    if cmd == "allow":
+        spec = servers[name]
+        if args.none:
+            spec["allow"] = []
+        elif args.all:
+            spec["allow"] = ["*"]
+        elif args.tools:
+            current = [t for t in spec.get("allow") or [] if t != "*"]
+            spec["allow"] = current + [t for t in args.tools if t not in current]
+        else:
+            ui.fail("Name the tools to allow, or use --all or --none")
+            return 1
+        save(cfg)
+        ui.ok(f"{name} now allows: " + ("all tools" if "*" in spec["allow"] else ", ".join(spec["allow"]) or "nothing"))
+        return 0
+    if cmd == "tools":
+        host = McpHost(cfg)
+        try:
+            ui.info(f"Starting {name} (the first run can be slow while it downloads)...")
+            tools = host.probe(name)
+        except McpError as e:
+            ui.fail(str(e))
+            return 1
+        finally:
+            host.close()
+        ui.table(["tool", "allowed", "read-only", "what it does"],
+                 [[t["tool"], "yes" if t["allowed"] else "no", "yes" if t["read_only"] else "no", t["description"][:60]] for t in tools])
+        ui.hint("Tools that are not read-only will ask for confirmation on the phone unless you set --confirm never.")
+        return 0
+    return 1
+
+
 def cmd_pair(args) -> int:
     cfg = load_file()
     if not cfg.get("token"):
@@ -217,6 +316,8 @@ def cmd_start(args) -> int:
     ui.ok(f"Pairing  {pairing_uri(f'http://127.0.0.1:{port}/v1', cfg['token'])}   (USB; paste it into the app)")
     if cfg.get("fallbacks"):
         ui.ok(f"Backup   {len(cfg['fallbacks'])} engine(s) ready if the main one fails")
+    if _mcp_servers(cfg):
+        ui.ok("Tools    " + ", ".join(_mcp_servers(cfg)) + "  (started the first time the phone asks)")
     if host not in ("127.0.0.1", "localhost", "::1"):
         for ip in lan_addresses():
             ui.ok(f"Wi-Fi    http://{ip}:{port}/v1   {pairing_uri(f'http://{ip}:{port}/v1', cfg['token'])}")
@@ -267,11 +368,33 @@ def add_parsers(sub) -> None:
     fa.add_argument("--api-key-env")
     fbs.add_parser("list", help="show backup engines")
     fbs.add_parser("clear", help="remove all backup engines")
+    mc = gs.add_parser("mcp", help="tool servers (MCP) that the pet may use")
+    mcs = mc.add_subparsers(dest="mcp_cmd")
+    ma = mcs.add_parser("add", help="add a tool server:  add [options] NAME -- COMMAND [ARGS...]")
+    ma.add_argument("name")
+    ma.add_argument("--allow", help="comma-separated tool names the pet may use")
+    ma.add_argument("--allow-all", action="store_true", help="let the pet use every tool this server offers")
+    ma.add_argument("--confirm", choices=["auto", "always", "never"], default="auto",
+                    help="when the phone should ask first: auto = for tools that are not read-only")
+    ma.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                    help="environment for the server; use KEY='$KEY' to take the value from your shell")
+    # not called "cmd": the top-level parser keeps the chosen command under that name
+    ma.add_argument("command_words", nargs=argparse.REMAINDER, metavar="COMMAND")
+    mcs.add_parser("list", help="show tool servers")
+    mr = mcs.add_parser("remove", help="remove a tool server")
+    mr.add_argument("name")
+    mt = mcs.add_parser("tools", help="start a server and show what it offers")
+    mt.add_argument("name")
+    mal = mcs.add_parser("allow", help="choose which tools of a server the pet may use")
+    mal.add_argument("name")
+    mal.add_argument("tools", nargs="*")
+    mal.add_argument("--all", action="store_true")
+    mal.add_argument("--none", action="store_true")
 
 
 def dispatch(args, parser) -> int:
     fn = {"init": cmd_init, "test": cmd_test, "start": cmd_start, "token": cmd_token, "pair": cmd_pair,
-          "doctor": cmd_doctor, "fallback": cmd_fallback}.get(args.gw_cmd)
+          "doctor": cmd_doctor, "fallback": cmd_fallback, "mcp": cmd_mcp}.get(args.gw_cmd)
     if not fn:
         parser.parse_args(["gateway", "--help"])
         return 0

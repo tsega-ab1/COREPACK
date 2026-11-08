@@ -9,6 +9,7 @@ import time
 import urllib.request
 
 from .gateway_config import validate
+from .mcp_host import McpHost
 from .upstream import Gateway
 from .adb import parse_adb_devices, parse_adb_reverse, parse_adb_unauthorized
 from .pairing import lan_addresses
@@ -48,6 +49,8 @@ def run_doctor(cfg: dict, port: int) -> list[tuple[str, str, str]]:
             out.append(("warn" if backup_ok else "fail", label, detail + ("  (a backup works, so the demo would still run)" if backup_ok else "")))
         else:
             out.append(("warn", label, detail))
+    for state, name, detail in McpHost(cfg).status():
+        out.append((state, f"Tool server {name}", detail))
     if len(provs) == 1:
         out.append(("warn", "Backup engine", "none set: a rate limit during the demo would stop it. Add one: corepack gateway fallback add"))
     try:

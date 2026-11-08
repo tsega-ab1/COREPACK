@@ -7,6 +7,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .gateway_config import MAX_BODY
+from .mcp_client import McpError
+from .mcp_host import McpHost, UnknownTool
 from .upstream import Gateway
 
 
@@ -19,6 +21,10 @@ class Handler(BaseHTTPRequestHandler):
     @property
     def gw(self) -> Gateway:
         return self.server.gw
+
+    @property
+    def mcp(self) -> McpHost:
+        return self.server.mcp
 
     def _send(self, code: int, body: bytes, ctype="application/json", extra=None):
         self.send_response(code)
@@ -49,9 +55,42 @@ class Handler(BaseHTTPRequestHandler):
             c = self.gw.cfg
             return self._json(200, {"object": "list", "data": [
                 {"id": c["model"], "object": "model", "owned_by": c.get("provider") or "upstream"}]})
+        if self.path == "/v1/tools":
+            if not self._authed():
+                return self._err(401, "Missing or wrong token", "unauthorized")
+            tools = self.mcp.tools()
+            return self._json(200, {"tools": tools, "errors": self.mcp.errors})
         self._err(404, "Not found", "not_found")
 
+    def _tool_call(self):
+        t0 = time.monotonic()
+        if not self._authed():
+            return self._err(401, "Missing or wrong token", "unauthorized")
+        try:
+            n = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            return self._err(411, "Content-Length required", "bad_request")
+        if n <= 0 or n > MAX_BODY:
+            return self._err(413, "Request body too large or empty", "bad_request")
+        try:
+            body = json.loads(self.rfile.read(n))
+            name, arguments = body["name"], body.get("arguments") or {}
+            if not isinstance(name, str) or not isinstance(arguments, dict):
+                raise ValueError
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return self._err(400, "Body must be JSON like {\"name\": \"...\", \"arguments\": {...}}", "bad_request")
+        try:
+            result = self.mcp.call(name, arguments)
+        except UnknownTool as e:
+            return self._err(404, str(e), "unknown_tool")
+        except McpError as e:
+            return self._err(502, f"The tool server failed: {e}", "tool_server_error")
+        self._json(200, result)
+        self.gw.log(f"MCP call {name}  {'ok' if result['ok'] else 'error'}  {int((time.monotonic() - t0) * 1000)} ms")
+
     def do_POST(self):
+        if self.path == "/v1/tools/call":
+            return self._tool_call()
         t0 = time.monotonic()
         if self.path not in ("/v1/chat/completions", "/chat/completions"):
             return self._err(404, "Not found", "not_found")
@@ -129,8 +168,18 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
+class _Server(ThreadingHTTPServer):
+    mcp: McpHost | None = None
+
+    def server_close(self):
+        if self.mcp is not None:
+            self.mcp.close()                    # stop the tool servers that were started
+        super().server_close()
+
+
 def make_server(cfg: dict, host: str | None = None, port: int | None = None, verbose: bool = False):
-    srv = ThreadingHTTPServer((host or cfg["host"], cfg["port"] if port is None else port), Handler)
+    srv = _Server((host or cfg["host"], cfg["port"] if port is None else port), Handler)
     srv.daemon_threads = True
     srv.gw = Gateway(cfg, verbose)
+    srv.mcp = McpHost(cfg)
     return srv

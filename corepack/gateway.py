@@ -61,6 +61,7 @@ from .gateway_cli import (  # noqa: F401
     cmd_doctor,
     cmd_fallback,
     cmd_init,
+    cmd_mcp,
     cmd_pair,
     cmd_start,
     cmd_test,
@@ -69,4 +70,4 @@ from .gateway_cli import (  # noqa: F401
     _pick_model,
 )
 
-__all__ = ['PRESETS', 'list_models', 'ALLOWED', 'DEFAULTS', 'MAX_BODY', 'file_path', 'load', 'load_file', 'save', 'validate', 'RateLimiter', 'Gateway', 'Handler', 'make_server', 'adb_reverse', 'parse_adb_devices', 'parse_adb_reverse', 'parse_adb_unauthorized', 'lan_addresses', 'pairing_uri', 'doctor_verdict', 'run_doctor', 'add_parsers', 'cmd_doctor', 'cmd_fallback', 'cmd_init', 'cmd_pair', 'cmd_start', 'cmd_test', 'cmd_token', 'dispatch']
+__all__ = ['PRESETS', 'list_models', 'ALLOWED', 'DEFAULTS', 'MAX_BODY', 'file_path', 'load', 'load_file', 'save', 'validate', 'RateLimiter', 'Gateway', 'Handler', 'make_server', 'adb_reverse', 'parse_adb_devices', 'parse_adb_reverse', 'parse_adb_unauthorized', 'lan_addresses', 'pairing_uri', 'doctor_verdict', 'run_doctor', 'add_parsers', 'cmd_doctor', 'cmd_fallback', 'cmd_init', 'cmd_mcp', 'cmd_pair', 'cmd_start', 'cmd_test', 'cmd_token', 'dispatch']

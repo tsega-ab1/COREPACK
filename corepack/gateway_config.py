@@ -21,6 +21,9 @@ DEFAULTS = {
     "timeout": 180,           # seconds to wait on the upstream engine
     "system_prompt": "",      # optional default persona if the client sends none
     "fallbacks": [],          # backup engines, tried in order if the main one fails or is rate-limited
+    "mcp_servers": {},        # MCP servers whose tools the phone may use: name -> {command, args, env, allow, confirm}
+    "mcp_timeout": 30,        # seconds a tool call may take
+    "mcp_max_result": 4000,   # characters of a tool result passed on to the phone
 }
 
 ALLOWED = {"messages", "temperature", "top_p", "max_tokens", "max_completion_tokens", "stop",
