@@ -1,0 +1,8 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- The pet, centred in the safe zone of an adaptive icon. -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M36 38h36a14 14 0 0 1 14 14v6a14 14 0 0 1-14 14H36a14 14 0 0 1-14-14v-6a14 14 0 0 1 14-14z" />
+    <path android:fillColor="#2B2350"
+        android:pathData="M38.5 55a3.5 5 0 1 0 7 0a3.5 5 0 1 0-7 0zM62.5 55a3.5 5 0 1 0 7 0a3.5 5 0 1 0-7 0z" />
+</vector>

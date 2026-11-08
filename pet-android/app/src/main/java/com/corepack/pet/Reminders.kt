@@ -8,9 +8,12 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.Build
+import android.widget.Toast
 import com.corepack.pet.agent.Reminder
 import com.corepack.pet.agent.ReminderScheduler
+import com.corepack.pet.mochi.MochiState
 
 /**
  * Schedules reminders with the system alarm clock, which fires on the minute even in Doze. From Android 12 that
@@ -50,12 +53,19 @@ class AlarmReminderScheduler(private val context: Context) : ReminderScheduler {
 
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_FIRE) return
-        Reminders.fire(context.applicationContext, intent.getLongExtra(EXTRA_ID, -1L))
+        val app = context.applicationContext
+        val id = intent.getLongExtra(EXTRA_ID, -1L)
+        when (intent.action) {
+            ACTION_FIRE -> Reminders.fire(app, id)
+            ACTION_SNOOZE -> Reminders.snooze(app, id)
+            ACTION_DONE -> Reminders.dismiss(app, id)
+        }
     }
 
     companion object {
         const val ACTION_FIRE = "com.corepack.pet.REMINDER_FIRE"
+        const val ACTION_SNOOZE = "com.corepack.pet.REMINDER_SNOOZE"
+        const val ACTION_DONE = "com.corepack.pet.REMINDER_DONE"
         const val EXTRA_ID = "id"
     }
 }
@@ -70,7 +80,7 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 object Reminders {
-    private const val CHANNEL = "reminders"
+    private const val SNOOZE_MS = 10 * 60 * 1000L
 
     /** A reminder is due: tell the chat, show a notification, and make the pet speak up. */
     fun fire(app: Context, id: Long) {
@@ -80,7 +90,7 @@ object Reminders {
         store.markDone(id)
         val text = "Reminder: ${r.text}"
         PetAgent.injectAssistant(app, text)
-        notify(app, "Reminder", r.text, id.toInt())
+        notify(app, "Hey, it's time", r.text, id.toInt(), MochiState.HAPPY, actions = true)
         PetEvents.say(text, urgent = true)
     }
 
@@ -93,27 +103,62 @@ object Reminders {
                 scheduler.schedule(r)
             } else {
                 store.markDone(r.id)
-                notify(app, "Missed reminder", r.text, r.id.toInt())
+                notify(app, "You missed this one", r.text, r.id.toInt(), MochiState.SAD, actions = false)
             }
         }
     }
 
-    private fun notify(app: Context, title: String, text: String, id: Int) {
+    /** Snooze: the same reminder again in ten minutes. */
+    fun snooze(app: Context, id: Long) {
+        val r = PetStores.reminders(app).get(id)
+        cancelNotification(app, id)
+        if (r == null) return
+        val next = PetStores.reminders(app).add(System.currentTimeMillis() + SNOOZE_MS, r.text)
+        if (next == null) {
+            Toast.makeText(app, "Too many reminders waiting to snooze this one", Toast.LENGTH_LONG).show()
+            return
+        }
+        AlarmReminderScheduler(app).schedule(next)
+        Toast.makeText(app, "Snoozed for 10 minutes", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Done: just clears the notification (the reminder was already marked done when it fired). */
+    fun dismiss(app: Context, id: Long) = cancelNotification(app, id)
+
+    private fun cancelNotification(app: Context, id: Long) {
+        app.getSystemService(NotificationManager::class.java).cancel(1000 + id.toInt())
+    }
+
+    private fun action(app: Context, icon: Int, label: String, act: String, id: Int, code: Int): Notification.Action {
+        val pi = PendingIntent.getBroadcast(
+            app, code,
+            Intent(app, ReminderReceiver::class.java).setAction(act).putExtra(ReminderReceiver.EXTRA_ID, id.toLong()),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return Notification.Action.Builder(Icon.createWithResource(app, icon), label, pi).build()
+    }
+
+    private fun notify(app: Context, title: String, text: String, id: Int, face: MochiState, actions: Boolean) {
+        PetNotifications.ensureChannels(app)
         val nm = app.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Reminders", NotificationManager.IMPORTANCE_HIGH))
         val open = PendingIntent.getActivity(
             app, 8, Intent(app, ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val n = Notification.Builder(app, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+        val b = Notification.Builder(app, PetNotifications.CHANNEL_REMINDERS)
+            .setSmallIcon(R.drawable.ic_stat_pet)
+            .setLargeIcon(PetNotifications.petFace(face))
+            .setColor(0xFF7F5BDF.toInt())
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setCategory(Notification.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(open)
-            .build()
-        nm.notify(1000 + id, n)
+        if (actions) {
+            b.addAction(action(app, R.drawable.ic_action_snooze, "Snooze 10 min", ReminderReceiver.ACTION_SNOOZE, id, 100_000 + id * 2))
+            b.addAction(action(app, R.drawable.ic_action_done, "Done", ReminderReceiver.ACTION_DONE, id, 100_001 + id * 2))
+        }
+        nm.notify(1000 + id, b.build())
     }
 }

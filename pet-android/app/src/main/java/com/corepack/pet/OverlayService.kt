@@ -133,7 +133,7 @@ class OverlayService : Service() {
         )
         val stopIcon = Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel)
         val b = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_pet)
             .setContentTitle(if (sleeping) "CorePack pet is resting" else "CorePack pet is running")
             .setContentText(if (sleeping) "Back in an hour, or tap Wake" else "Tap the pet, or this, to chat")
             .setContentIntent(chat)
@@ -151,9 +151,7 @@ class OverlayService : Service() {
 
     private fun startForegroundCompat() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Pet overlay", NotificationManager.IMPORTANCE_LOW)
-        )
+        PetNotifications.ensureChannels(this)
         nm.cancel(NOTIF_RESTORE)
         val n = buildNotification()
         if (Build.VERSION.SDK_INT >= 34) {
@@ -310,16 +308,15 @@ class OverlayService : Service() {
     private fun removePet() {
         menu?.dismissNow()
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_HIDDEN, "Pet removed", NotificationManager.IMPORTANCE_LOW)
-        )
+        PetNotifications.ensureChannels(this)
         val start = PendingIntent.getForegroundService(
             this, 3, Intent(this, OverlayService::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         nm.notify(
             NOTIF_RESTORE,
             Notification.Builder(this, CHANNEL_HIDDEN)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(R.drawable.ic_stat_pet)
+                .setLargeIcon(PetNotifications.petFace(com.corepack.pet.mochi.MochiState.SAD))
                 .setContentTitle("Pet removed")
                 .setContentText("Tap to bring it back")
                 .setContentIntent(start)
