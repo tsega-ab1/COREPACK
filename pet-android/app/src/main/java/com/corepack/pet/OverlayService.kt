@@ -267,7 +267,7 @@ class OverlayService : Service() {
 
     private fun openApp() {
         try {
-            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            startActivity(Intent(this, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (e: Exception) {
             Toast.makeText(this, "Open the app from your launcher", Toast.LENGTH_SHORT).show()
         }

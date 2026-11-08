@@ -30,13 +30,19 @@
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
 
         <activity
-            android:name=".MainActivity"
+            android:name=".HomeActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The connection and permissions form (opened from the gear on Home). -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:label="Connection" />
 
         <!-- The chat sheet. Also the target of Share and of "Ask pet" in the text selection menu. -->
         <activity
