@@ -82,6 +82,7 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(McpError) as cm:
             c.call_tool("slow", {"seconds": 1.0}, timeout=0.3)
         self.assertIn("timed out", str(cm.exception))
+        self.assertIn("working on it", str(cm.exception), "what the server printed meanwhile is shown, to help find the cause")
         time.sleep(1.2)                          # the late answer arrives and is ignored
         self.assertEqual(c.call_tool("echo", {"text": "still here"})["content"][0]["text"], "echo: still here")
 

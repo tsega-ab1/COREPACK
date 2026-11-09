@@ -141,7 +141,8 @@ class StdioMcpClient:
         if not slot["event"].wait(timeout):
             with self._state_lock:
                 self._pending.pop(rid, None)
-            raise McpError(f"{method} timed out after {timeout:g} s")
+            tail = " | ".join(list(self._stderr)[-3:])
+            raise McpError(f"{method} timed out after {timeout:g} s" + (f" (the server said: {tail})" if tail else ""))
         msg = slot["msg"] or {}
         if "error" in msg:
             err = msg["error"] if isinstance(msg["error"], dict) else {}

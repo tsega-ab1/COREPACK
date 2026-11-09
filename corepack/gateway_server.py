@@ -84,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
         except UnknownTool as e:
             return self._err(404, str(e), "unknown_tool")
         except McpError as e:
+            self.gw.log(f"MCP call {name} failed after {int((time.monotonic() - t0) * 1000)} ms: {e}")
             return self._err(502, f"The tool server failed: {e}", "tool_server_error")
         self._json(200, result)
         self.gw.log(f"MCP call {name}  {'ok' if result['ok'] else 'error'}  {int((time.monotonic() - t0) * 1000)} ms")

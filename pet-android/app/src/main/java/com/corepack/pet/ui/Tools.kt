@@ -46,6 +46,7 @@ private fun tintFor(c: Capability): Tint = when (c) {
     Capability.PHONE_ACTIONS -> Tints.Sky
     Capability.LOOKUPS -> Tints.Violet
     Capability.NUDGES -> Tints.Peach
+    Capability.REMOTE_TOOLS -> Tints.Sky
 }
 
 /** What the pet may do. The model only ever sees the tools that are switched on. */

@@ -50,6 +50,8 @@ def call(name, args):
     if name == "delete_everything":
         return text("deleted (not really)")
     if name == "slow":
+        sys.stderr.write("working on it\n")
+        sys.stderr.flush()
         time.sleep(float(args.get("seconds", 1)))
         return text("done sleeping")
     if name == "big":
