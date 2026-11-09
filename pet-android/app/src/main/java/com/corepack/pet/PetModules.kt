@@ -46,6 +46,7 @@ object PetModules {
         RemindersModule(app),
         TasksNotesModule(app),
         PhoneActionsModule(app),
+        ScreenModule(),
         LookupsModule(),
         remote(app),
     )

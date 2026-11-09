@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="screen_service_desc">Lets CorePack Pet read what is on your screen when you ask it to. It never taps or types for you.</string>
+</resources>

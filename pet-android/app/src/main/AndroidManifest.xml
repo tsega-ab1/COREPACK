@@ -87,5 +87,18 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Draggable on-screen companion that opens a chat" />
         </service>
+        <!-- The pet's eye: reads the screen as text. Off until the user enables it in Settings > Accessibility. -->
+        <service
+            android:name=".ScreenService"
+            android:exported="false"
+            android:label="CorePack Pet screen eye"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/screen_service" />
+        </service>
     </application>
 </manifest>
