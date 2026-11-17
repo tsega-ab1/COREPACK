@@ -1,5 +1,5 @@
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  SHA256SUMS
-2c93ad92b5dfbdbd6b069983dbb30ae8fdb6bb74dc91ab2400b663ac1ade961b  docs/MOCHI_DESIGN.md
+2c93ad92b5dfbdbd6b069983dbb30ae8fdb6bb74dc91ab2400b663ac1ade961b  docs/PET_DESIGN.md
 0602e765b78d85f238458bc58008999741828fa751b50cccc8f7508638fff4cd  docs/PHONE_PET.md
 479df9ba9807dcf4d410f9f961770171394818009ea48e36d0b37f81a3cb9892  pet-android/README.md
 b60ed0bbfe5a9a711fa6b2e58abf9fff742a0fbc38a27b27072419b731508b29  pet-android/app/src/main/AndroidManifest.xml
@@ -32,14 +32,14 @@ b4e6b297caaf7d4c9660df3f6526ec7401fae5180224e5ab662eadc5f16af5fc  pet-android/ap
 57cd2518e55ccfa967fea38b01babc76a45d9b7a84894f468f5a30cce42c895e  pet-android/app/src/main/java/com/corepack/pet/agent/Stores.kt
 79a493dee9cc372ef61ec32f75cc20792d32d0c376d817d83876d4432de4390c  pet-android/app/src/main/java/com/corepack/pet/agent/Tools.kt
 1d20e0a66319cbc65b56ec0bdb5158e365459b7bfcd0a71a361c24a2e3bb628f  pet-android/app/src/main/java/com/corepack/pet/agent/Types.kt
-380c6b838e6e313335442ff3bbe3e978e2a9686b706c0848177eed2ed5d0f079  pet-android/app/src/main/java/com/corepack/pet/mochi/Gfx.kt
-7bb3b8f8a87c5c700fdcbfd17f1010fa76213a940fddd6e9707774a155e3573a  pet-android/app/src/main/java/com/corepack/pet/mochi/Mochi.kt
-1d79724fe6d3c03a7115209a57dbd6b33b3149181b340a9de9b2a017de2d8bde  pet-android/app/src/main/java/com/corepack/pet/mochi/MochiRenderer.kt
+380c6b838e6e313335442ff3bbe3e978e2a9686b706c0848177eed2ed5d0f079  pet-android/app/src/main/java/com/corepack/pet/look/Gfx.kt
+7bb3b8f8a87c5c700fdcbfd17f1010fa76213a940fddd6e9707774a155e3573a  pet-android/app/src/main/java/com/corepack/pet/look/PetLook.kt
+1d79724fe6d3c03a7115209a57dbd6b33b3149181b340a9de9b2a017de2d8bde  pet-android/app/src/main/java/com/corepack/pet/look/PetRenderer.kt
 e021c6fdd35654ddea4032678106a08ca43276749d9c181d6db667e94f1b27b8  pet-android/jvm-tests/AssistantTests.kt
 810650e36fc8d3d2cd950a4cd76ad5e56b522e4ba97a32e7cf8d2e842e3ed6d5  pet-android/jvm-tests/E2E.kt
 8748bf764dddebbed0429b4ab81d66cad22a6681f2f4088df376cb1e6fff223d  pet-android/jvm-tests/Java2DGfx.kt
-830f3d8d1fc4040a9947612529e9f8b076e266f7507487b80a73aee057d58bc6  pet-android/jvm-tests/MochiPreview.kt
-e4de1131167996aa8a35223c0119ca48729ef4432bd55b4f63f5b7cd564d6486  pet-android/jvm-tests/MochiTests.kt
+830f3d8d1fc4040a9947612529e9f8b076e266f7507487b80a73aee057d58bc6  pet-android/jvm-tests/PetPreview.kt
+e4de1131167996aa8a35223c0119ca48729ef4432bd55b4f63f5b7cd564d6486  pet-android/jvm-tests/PetLookTests.kt
 94cfd76efa6d5817f4b882058002603e1b64ec335af700a1a7d9a5fe2f1863e5  pet-android/jvm-tests/README.md
 45755785876004cf8b5fe07b38ed95a44094df96f6b12b71bc9941d40d0368e1  pet-android/jvm-tests/UnitTests.kt
 c45ad2e9d7a9c45f560ae110eca539315061a4f16277d096448b79e34301dfc9  pet-android/jvm-tests/fake_gemini.py

@@ -1,0 +1,6 @@
+# Automatic HTTPS for your domain. Set DOMAIN in deploy/.env (for example DOMAIN=gateway.example.com).
+{$DOMAIN} {
+	reverse_proxy gateway:7860 {
+		flush_interval -1      # stream replies as they are made
+	}
+}

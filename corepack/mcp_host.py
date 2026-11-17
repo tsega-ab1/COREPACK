@@ -35,6 +35,10 @@ class UnknownTool(McpError):
     """The phone asked for a tool that is not on the list (or not allowed)."""
 
 
+class UnknownResource(McpError):
+    """The phone asked for a resource or prompt that is not offered (or not switched on)."""
+
+
 def clean_schema(schema) -> dict:
     """Reduces a tool's JSON schema to what every engine's function calling accepts: type, description, enum,
     properties, required and items. Engines differ in what else they take (Gemini refuses `format: uri`,
@@ -129,6 +133,9 @@ class McpHost:
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.errors: dict[str, str] = {}
+        self.resource_errors: dict[str, str] = {}
+        self.prompt_errors: dict[str, str] = {}
+        self._extras: dict[tuple[str, str], tuple[float, list[dict]]] = {}   # (kind, server) -> (when, items)
         self._clients: dict[str, StdioMcpClient] = {}
         self._listing: dict[str, tuple[float, list[dict]]] = {}     # server -> (when, tools as offered)
         self._routes: dict[str, tuple[str, str]] = {}               # public name -> (server, tool)
@@ -136,6 +143,7 @@ class McpHost:
         self._start_locks: dict[str, threading.Lock] = {}           # one per server: only one start at a time
         self._failed: dict[str, tuple[float, str]] = {}             # server -> (when, why) its last start failed
         self._closed = False
+        self._tainted_until = 0.0                                   # until when private data may still be in play
         self._slots = threading.Semaphore(CONCURRENT_CALLS)
 
     # ---------------------------------------------------------------- configuration
@@ -157,6 +165,51 @@ class McpHost:
             return max(200, int(self.cfg.get("mcp_max_result") or 4000))
         except (TypeError, ValueError):
             return 4000
+
+    # ---------------------------------------------------------------- private servers
+    # A server marked private (for example one that searches your screen history) keeps its data on this PC:
+    # while its data may be in a conversation, only an engine that runs on this PC may answer.
+
+    def private_servers(self) -> set[str]:
+        return {n for n, s in self.servers().items() if s.get("private")}
+
+    def _taint(self, server: str) -> None:
+        """Called whenever a private server is asked for something, even if it then fails."""
+        if server in self.private_servers():
+            try:
+                window = float(self.cfg.get("private_window") or 600)
+            except (TypeError, ValueError):
+                window = 600.0
+            with self._lock:
+                self._tainted_until = max(self._tainted_until, time.monotonic() + window)
+
+    def recently_private(self) -> bool:
+        """Private data was handed out a moment ago, so anything asked now might carry it."""
+        return time.monotonic() < self._tainted_until
+
+    def conversation_is_private(self, messages) -> bool:
+        """True if the conversation so far contains a call to a private server (so its answer is in the history)."""
+        private = self.private_servers()
+        if not private or not isinstance(messages, list):
+            return False
+        prefixes = tuple(re.sub(r"[^A-Za-z0-9_-]", "_", n) + SEP for n in private)
+        resources_private = any(self.servers()[n].get("resources") for n in private)
+        for m in messages:
+            for c in (m.get("tool_calls") or []) if isinstance(m, dict) else []:
+                fn = c.get("function") if isinstance(c, dict) else None
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if not isinstance(name, str):
+                    continue
+                if name.startswith(prefixes) or (name == "list_resources" and resources_private):
+                    return True
+                if name == "read_resource":
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except ValueError:
+                        args = {}
+                    if isinstance(args, dict) and args.get("server") in private:
+                        return True
+        return False
 
     @staticmethod
     def allowed(spec: dict, tool: str) -> bool:
@@ -317,14 +370,112 @@ class McpHost:
         spec = self.servers().get(server) or {}
         if not self.allowed(spec, tool):
             raise UnknownTool(f"No allowed tool called {name!r}")
+        self._taint(server)
         with self._slots:
             client = self._client(server)
             result = client.call_tool(tool, arguments, timeout=self._timeout(spec))
-        text = result_text(result)
+        return {"ok": not result.get("isError"), "text": self._cut(result_text(result))}
+
+    def _cut(self, text: str) -> str:
         limit = self._max_result()
         if len(text) > limit:
             text = text[:limit] + f"\n[cut: {len(text) - limit} more characters]"
-        return {"ok": not result.get("isError"), "text": text}
+        return text
+
+    # ---------------------------------------------------------------- resources and prompts
+    # Resources are data a server offers to read (files, records); prompts are ready-made request templates.
+    # Both are off for every server until you switch them on, and only what the server lists can be used.
+
+    def _extra(self, kind: str, name: str, wait: bool) -> list[dict]:
+        client = self._client(name, wait)
+        with self._lock:
+            cached = self._extras.get((kind, name))
+            if cached and time.monotonic() - cached[0] < LISTING_TTL and not client.stale:
+                return cached[1]
+        items = client.list_resources() if kind == "resources" else client.list_prompts()
+        with self._lock:
+            self._extras[(kind, name)] = (time.monotonic(), items)
+        return items
+
+    def offered(self, name: str, kind: str) -> list[dict]:
+        """Everything a server has of this kind ("resources" or "prompts"), switched on or not, for the CLI."""
+        with self._lock:
+            self._extras.pop((kind, name), None)
+        return self._extra(kind, name, wait=True)
+
+    def resources(self) -> list[dict]:
+        out: list[dict] = []
+        errors: dict[str, str] = {}
+        for name, spec in self.servers().items():
+            if not spec.get("resources"):
+                continue
+            try:
+                items = self._extra("resources", name, wait=False)
+            except McpError as e:
+                errors[name] = str(e)
+                continue
+            for r in items:
+                out.append({"server": name, "uri": str(r["uri"]), "name": str(r.get("name") or r["uri"]),
+                            "description": " ".join(str(r.get("description") or "").split())[:MAX_DESCRIPTION],
+                            "mime_type": str(r.get("mimeType") or "")})
+        with self._lock:
+            self.resource_errors = errors
+        return out
+
+    def read_resource(self, server: str, uri: str) -> dict:
+        spec = self.servers().get(server)
+        if spec is None or not spec.get("resources"):
+            raise UnknownResource(f"Server {server!r} has no resources switched on")
+        if uri not in {str(r["uri"]) for r in self._extra("resources", server, wait=True)}:
+            raise UnknownResource(f"No resource {uri!r} on {server!r}")
+        self._taint(server)
+        with self._slots:
+            result = self._client(server).read_resource(uri, timeout=self._timeout(spec))
+        parts = []
+        for c in result.get("contents") or []:
+            if isinstance(c, dict):
+                parts.append(str(c["text"]) if "text" in c else f"[{c.get('mimeType') or 'binary'} content omitted]")
+        return {"ok": True, "text": self._cut("\n".join(parts) or "(the resource is empty)")}
+
+    def prompts(self) -> list[dict]:
+        out: list[dict] = []
+        errors: dict[str, str] = {}
+        for name, spec in self.servers().items():
+            if not spec.get("prompts"):
+                continue
+            try:
+                items = self._extra("prompts", name, wait=False)
+            except McpError as e:
+                errors[name] = str(e)
+                continue
+            for p in items:
+                args = [{"name": str(a.get("name")), "description": str(a.get("description") or "")[:200], "required": bool(a.get("required"))}
+                        for a in p.get("arguments") or [] if isinstance(a, dict) and a.get("name")]
+                out.append({"server": name, "name": str(p["name"]),
+                            "description": " ".join(str(p.get("description") or "").split())[:MAX_DESCRIPTION], "arguments": args})
+        with self._lock:
+            self.prompt_errors = errors
+        return out
+
+    def get_prompt(self, server: str, name: str, arguments: dict) -> dict:
+        spec = self.servers().get(server)
+        if spec is None or not spec.get("prompts"):
+            raise UnknownResource(f"Server {server!r} has no prompts switched on")
+        if name not in {str(p["name"]) for p in self._extra("prompts", server, wait=True)}:
+            raise UnknownResource(f"No prompt {name!r} on {server!r}")
+        if not isinstance(arguments, dict):
+            raise McpError("Prompt arguments must be an object")
+        self._taint(server)
+        with self._slots:
+            result = self._client(server).get_prompt(name, {str(k): str(v) for k, v in arguments.items()}, timeout=self._timeout(spec))
+        lines = []
+        for m in result.get("messages") or []:
+            content = m.get("content") if isinstance(m, dict) else None
+            if isinstance(content, dict) and content.get("type") == "text":
+                lines.append(f"{m.get('role', 'user')}: {content.get('text', '')}")
+            elif isinstance(content, dict):
+                lines.append(f"{m.get('role', 'user')}: [{content.get('type', 'unknown')} content omitted]")
+        return {"ok": True, "text": self._cut("\n".join(lines) or "(the prompt is empty)")}
 
     def status(self) -> list[tuple[str, str, str]]:
         """A quick check that needs no process: (state, server, detail) with state ok / warn / fail."""
@@ -341,6 +492,7 @@ class McpHost:
     def close(self) -> None:
         with self._lock:
             self._closed = True
+            self._extras.clear()
             clients, self._clients = list(self._clients.values()), {}
             self._listing.clear()
             self._routes = {}

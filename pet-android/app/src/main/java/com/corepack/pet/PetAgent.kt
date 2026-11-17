@@ -5,14 +5,17 @@ import com.corepack.pet.agent.AgentLoop
 import com.corepack.pet.agent.AgentSession
 import com.corepack.pet.agent.FactStore
 import com.corepack.pet.agent.GatewayModel
+import com.corepack.pet.agent.HistoryRestore
 import com.corepack.pet.agent.Model
 import com.corepack.pet.agent.ModelException
 import com.corepack.pet.agent.PacedSink
 import com.corepack.pet.agent.Prompt
 import com.corepack.pet.agent.ReplySink
 import com.corepack.pet.agent.ToolConfirmer
+import com.corepack.pet.agent.ToolOutcome
 import com.corepack.pet.agent.StreamedText
 import com.corepack.pet.agent.ToolModule
+import com.corepack.pet.agent.Requirement
 import com.corepack.pet.agent.ToolRegistry
 import java.io.File
 import java.time.ZonedDateTime
@@ -35,7 +38,7 @@ object PetAgent {
      * more modules; nothing else in this file needs to change.
      */
     @Volatile
-    var modelFactory: (Context) -> Model = { app -> GatewayModel(Prefs.baseUrl(app), Prefs.token(app)) }
+    var modelFactory: (Context) -> Model = { app -> GatewayModel(Prefs.baseUrl(app), Prefs.token(app), userKey = Prefs.apiKey(app), userProvider = Prefs.provider(app), userModel = Prefs.model(app)) }
 
     @Volatile
     var moduleFactory: (Context, FactStore) -> List<ToolModule> = { app, store -> PetModules.builtin(app, store) }
@@ -68,9 +71,17 @@ object PetAgent {
      * Never blocks: it may be called while a reply is still streaming.
      */
     fun injectAssistant(context: Context, text: String) {
+        ChatStore.attach(chatFile(context.applicationContext))
         ChatStore.add("assistant", text)
-        session.inject(text)
+        ChatStore.save()
+        // Before the model's memory has been rebuilt from the chat, the chat itself already holds this message.
+        if (restored) session.inject(text)
     }
+
+    private fun chatFile(app: Context) = File(app.filesDir, "chat.json")
+
+    @Volatile
+    private var restored = false
 
     /** Stops the model, and stops showing any text that has not appeared yet. */
     fun cancel() {
@@ -80,14 +91,27 @@ object PetAgent {
 
     fun send(context: Context, userText: String, ui: UiListener) {
         val app = context.applicationContext
+        ChatStore.attach(chatFile(app))
+        if (!restored) {
+            // First message since the app started: give the model back the conversation the chat screen still shows.
+            restored = true
+            val chat = ChatStore.forRequest()
+            val earlier = if (chat.lastOrNull()?.first == "user") chat.dropLast(1) else chat   // the last one is this message
+            session.restore(HistoryRestore.fromChat(earlier))
+        }
+        ChatStore.save()
         val store = facts(app)
         val caps = PetStores.capabilities(app)
-        val registry = ToolRegistry(moduleFactory(app, store))
-        session.arm(modelFactory(app)) { registry.tools(caps) }
+        val registry = ToolRegistry(moduleFactory(app, store)) { toolConfirmer }
+        val granted = { r: Requirement -> Requirements.isGranted(app, r) }
+        session.arm(modelFactory(app)) { registry.tools(caps, granted) }
         busy = true
 
         // Everything the chat hears goes through the pacer; it clears [busy] just before the final event.
-        val out = PacedSink(ui, charsPerSecond = REVEAL_CHARS_PER_SECOND, beforeEnd = { busy = false })
+        val out = PacedSink(ui, charsPerSecond = REVEAL_CHARS_PER_SECOND, beforeEnd = {
+            busy = false
+            ChatStore.save()
+        })
         pacer = out
 
         // The reply is shown as it streams in, so the chat is only handed text at the end if none of it streamed.
@@ -124,14 +148,17 @@ object PetAgent {
                 out.onTool(name)
             }
 
-            override fun onToolDone(name: String, result: String) = Unit
+            override fun onToolDone(name: String, result: String) {
+                val outcome = ToolOutcome.of(result)
+                out.onToolResult(name, outcome.ok, outcome.note)
+            }
         }
 
         Thread {
             try {
                 val reply = session.run(
                     userText,
-                    { Prompt.system(store.all(), ZonedDateTime.now(), caps, registry.promptHints(caps)) },
+                    { Prompt.system(store.all(), ZonedDateTime.now(), caps, registry.promptHints(caps, granted)) },
                     listener,
                 )
                 PetBus.setThenIdle(Phase.SETTLE, 1800L)

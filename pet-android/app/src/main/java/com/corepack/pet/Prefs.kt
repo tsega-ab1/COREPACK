@@ -3,13 +3,29 @@ package com.corepack.pet
 import android.content.Context
 
 object Prefs {
-    private const val DEFAULT_URL = "http://127.0.0.1:8787/v1"
+    private val DEFAULT_URL = BuildConfig.DEFAULT_GATEWAY_URL
 
     private fun sp(c: Context) = c.getSharedPreferences("corepack_pet", Context.MODE_PRIVATE)
 
     fun baseUrl(c: Context): String = sp(c).getString("base_url", DEFAULT_URL) ?: DEFAULT_URL
 
-    fun token(c: Context): String = sp(c).getString("token", "") ?: ""
+    /** The invite code or gateway token. Falls back to the one baked into the APK, if any. */
+    fun token(c: Context): String =
+        sp(c).getString("token", "")?.takeIf { it.isNotBlank() } ?: BuildConfig.DEFAULT_INVITE
+
+    /** The person's own API key. Empty means the server's shared key is used. */
+    fun apiKey(c: Context): String = sp(c).getString("api_key", "") ?: ""
+
+    /** Which engine the person's own key is for: "gemini" or "xai". */
+    fun provider(c: Context): String = sp(c).getString("provider", "gemini") ?: "gemini"
+
+    /** Optional model name to use with the person's own key. */
+    fun model(c: Context): String = sp(c).getString("model", "") ?: ""
+
+    fun saveEngine(c: Context, provider: String, apiKey: String, model: String) {
+        sp(c).edit().putString("provider", provider).putString("api_key", apiKey.trim())
+            .putString("model", model.trim()).apply()
+    }
 
     fun save(c: Context, url: String, token: String) {
         sp(c).edit().putString("base_url", url.trim()).putString("token", token.trim()).apply()

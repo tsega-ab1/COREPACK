@@ -36,6 +36,41 @@ class HttpToolGateway(
         return RemoteResult(o.optBoolean("ok", false), o.optString("text", ""))
     }
 
+    override fun engines(): List<EngineInfo> {
+        val (code, text) = send("GET", "/engines", null, listTimeoutMs)
+        if (code == 404) return emptyList()                     // an older gateway
+        if (code != 200) throw IOException(describe(code, text))
+        val arr = parse(text).optJSONArray("engines") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val name = o.optString("name", "")
+            if (name.isBlank()) null else EngineInfo(name, o.optString("description", ""))
+        }
+    }
+
+    override fun resources(): List<ResourceInfo> {
+        val (code, text) = send("GET", "/resources", null, listTimeoutMs)
+        if (code == 404) return emptyList()
+        if (code != 200) throw IOException(describe(code, text))
+        val arr = parse(text).optJSONArray("resources") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val server = o.optString("server", "")
+            val uri = o.optString("uri", "")
+            if (server.isBlank() || uri.isBlank()) null
+            else ResourceInfo(server, uri, o.optString("name", uri), o.optString("description", ""), o.optString("mime_type", ""))
+        }
+    }
+
+    override fun readResource(server: String, uri: String): RemoteResult {
+        val body = JSONObject().put("server", server).put("uri", uri).toString()
+        val (code, text) = send("POST", "/resources/read", body, callTimeoutMs)
+        if (code == 404) throw RemoteToolGone(describe(code, text))
+        if (code != 200) throw IOException(describe(code, text))
+        val o = parse(text)
+        return RemoteResult(o.optBoolean("ok", false), o.optString("text", ""))
+    }
+
     private fun parseTool(o: JSONObject?): RemoteToolInfo? {
         if (o == null) return null
         val name = o.optString("name", "")

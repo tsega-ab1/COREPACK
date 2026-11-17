@@ -6,6 +6,9 @@ import java.util.concurrent.atomic.AtomicInteger
 /** What the chat screen needs to hear about a reply. */
 interface ReplySink {
     fun onTool(name: String)
+
+    /** How a tool did, once it has finished. Optional: a screen that does not care can leave it out. */
+    fun onToolResult(name: String, ok: Boolean, note: String) {}
     fun onToken(text: String)
     fun onDone(text: String)
     fun onError(message: String, unreachable: Boolean)
@@ -30,6 +33,7 @@ class PacedSink(
     private sealed class Item {
         class Text(val text: String) : Item()
         class Tool(val name: String) : Item()
+        class ToolResult(val name: String, val ok: Boolean, val note: String) : Item()
         class Done(val text: String) : Item()
         class Error(val message: String, val unreachable: Boolean) : Item()
     }
@@ -57,6 +61,10 @@ class PacedSink(
         queue.add(Item.Tool(name))
     }
 
+    override fun onToolResult(name: String, ok: Boolean, note: String) {
+        queue.add(Item.ToolResult(name, ok, note))
+    }
+
     override fun onDone(text: String) {
         queue.add(Item.Done(text))
     }
@@ -77,6 +85,7 @@ class PacedSink(
                 when (val item = queue.take()) {
                     is Item.Text -> show(item.text)
                     is Item.Tool -> if (!skipping) out.onTool(item.name)
+                    is Item.ToolResult -> if (!skipping) out.onToolResult(item.name, item.ok, item.note)
                     is Item.Done -> {
                         ended = true
                         beforeEnd()

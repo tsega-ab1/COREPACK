@@ -1,4 +1,4 @@
-package com.corepack.pet.mochi
+package com.corepack.pet.look
 
 import kotlin.math.PI
 import kotlin.math.cos
@@ -8,10 +8,10 @@ import kotlin.math.sign
 import kotlin.math.sin
 
 /**
- * Draws one [MochiPose]. Everything is in "reference pixels", measured from the design clips:
+ * Draws one [PetPose]. Everything is in "reference pixels", measured from the design clips:
  * the body is 228 x 176 and the whole stage is 340 x 300 with the body centre 25 px below the middle.
  */
-object MochiRenderer {
+object PetRenderer {
     const val STAGE_W = 340f
     const val STAGE_H = 300f
     const val ASPECT = STAGE_W / STAGE_H
@@ -67,7 +67,7 @@ object MochiRenderer {
         }
     }
 
-    fun draw(g: Gfx, p: MochiPose, width: Float, height: Float) {
+    fun draw(g: Gfx, p: PetPose, width: Float, height: Float) {
         val s = min(width / STAGE_W, height / STAGE_H)
         g.save()
         g.translate(width / 2f, height / 2f)
@@ -88,7 +88,7 @@ object MochiRenderer {
      * that orbit it. Radial gradients only (no blur), so it is cheap and works on every Android version.
      * It is drawn behind the body, so the inside of the halo is left clear.
      */
-    private fun drawAura(g: Gfx, p: MochiPose) {
+    private fun drawAura(g: Gfx, p: PetPose) {
         val k = p.aura
         if (k <= 0.01f) return
         val breathe = 0.82f + 0.18f * p.auraPulse
@@ -128,7 +128,7 @@ object MochiRenderer {
         }
     }
 
-    private fun drawGlow(g: Gfx, p: MochiPose) {
+    private fun drawGlow(g: Gfx, p: PetPose) {
         if (p.glowAlpha <= 0f) return
         val a = p.glowAlpha
         g.save()
@@ -143,7 +143,7 @@ object MochiRenderer {
         g.restore()
     }
 
-    private fun drawShadow(g: Gfx, p: MochiPose) {
+    private fun drawShadow(g: Gfx, p: PetPose) {
         g.save()
         g.translate(0f, B + 26f)
         val r = 96f * p.shadow
@@ -155,7 +155,7 @@ object MochiRenderer {
         g.restore()
     }
 
-    private fun drawHand(g: Gfx, p: MochiPose, h: Hand) {
+    private fun drawHand(g: Gfx, p: PetPose, h: Hand) {
         if (h.rx <= 0.5f) return
         g.save()
         g.translate(h.x, h.y)
@@ -164,7 +164,7 @@ object MochiRenderer {
         g.restore()
     }
 
-    private fun drawBody(g: Gfx, p: MochiPose) {
+    private fun drawBody(g: Gfx, p: PetPose) {
         g.save()
         g.translate(p.dx, p.dy)
         g.translate(0f, B)

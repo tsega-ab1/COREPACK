@@ -5,9 +5,9 @@ import android.app.NotificationManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import com.corepack.pet.mochi.MochiAnimator
-import com.corepack.pet.mochi.MochiRenderer
-import com.corepack.pet.mochi.MochiState
+import com.corepack.pet.look.PetAnimator
+import com.corepack.pet.look.PetRenderer
+import com.corepack.pet.look.PetState
 
 /** Notification channels (so each kind can be muted on its own) and the pet's face as a notification picture. */
 object PetNotifications {
@@ -32,11 +32,11 @@ object PetNotifications {
     }
 
     /** The pet in [state], drawn by the same code as the floating pet, as a square picture. */
-    fun petFace(state: MochiState, px: Int = 192): Bitmap {
+    fun petFace(state: PetState, px: Int = 192): Bitmap {
         val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
         val gfx = AndroidGfx()
         gfx.begin(Canvas(bmp))
-        MochiRenderer.draw(gfx, MochiAnimator.pose(state, 1f, 0.3f), px.toFloat(), px.toFloat())
+        PetRenderer.draw(gfx, PetAnimator.pose(state, 1f, 0.3f), px.toFloat(), px.toFloat())
         return bmp
     }
 }

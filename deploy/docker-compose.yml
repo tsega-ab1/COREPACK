@@ -1,0 +1,19 @@
+# VPS: docker compose --env-file .env up -d     (run inside deploy/, after copying the repo's Dockerfile context)
+services:
+  gateway:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    expose: ["7860"]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [gateway]
+volumes:
+  caddy_data:

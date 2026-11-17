@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.corepack.pet.agent.ScreenGuard
 
 /**
  * The pet's eye. Read-only: it can list what is on screen, never tap or type.
@@ -23,6 +24,8 @@ class ScreenService : AccessibilityService() {
     /** The screen as text: the app, then one line per visible text, button or field. */
     fun readScreen(): String {
         val root = targetRoot() ?: return "error: nothing readable is on screen right now"
+        // Banking, wallets, password managers and authenticators are never read.
+        ScreenGuard.blockedReason(root.packageName?.toString())?.let { return "error: $it" }
         val m = resources.displayMetrics
         val out = StringBuilder("App: ${root.packageName}\nScreen: ${m.widthPixels}x${m.heightPixels}\n")
         val count = intArrayOf(0)
@@ -44,8 +47,9 @@ class ScreenService : AccessibilityService() {
     private fun walk(node: AccessibilityNodeInfo, out: StringBuilder, count: IntArray) {
         if (count[0] >= MAX_NODES || out.length >= MAX_CHARS) return
         if (!node.isVisibleToUser) return
-        val text = if (node.isPassword) "(password hidden)" else node.text?.toString()?.trim().orEmpty()
-        val desc = node.contentDescription?.toString()?.trim().orEmpty()
+        // Card numbers and one-time codes are hidden before the text leaves this class.
+        val text = if (node.isPassword) "(password hidden)" else ScreenGuard.redact(node.text?.toString()?.trim().orEmpty())
+        val desc = ScreenGuard.redact(node.contentDescription?.toString()?.trim().orEmpty())
         val hint = if (node.isEditable && text.isEmpty()) node.hintText?.toString()?.trim().orEmpty() else ""
         if (text.isNotEmpty() || desc.isNotEmpty() || hint.isNotEmpty() || node.isClickable || node.isEditable || node.isCheckable) {
             count[0]++

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 
 from .gateway_config import ALLOWED
+from .hosted import Tenants
+from .providers import is_local_engine
 from .ratelimit import RateLimiter
 
 
@@ -45,25 +48,54 @@ class Gateway:
         self.verbose = verbose
         self.cooling: dict[int, float] = {}     # provider index -> time until which to avoid it
         self.last_provider = ""
+        self.tenants = Tenants(cfg)
+        slots = int(cfg.get("max_concurrent") or 0)
+        self.slots = threading.BoundedSemaphore(slots) if slots > 0 else None
 
     def log(self, msg: str) -> None:
         if self.verbose:
             print(f"  {time.strftime('%H:%M:%S')}  {msg}", file=sys.stderr, flush=True)
 
     def redact(self, s: str) -> str:
-        for key in [self.cfg.get("api_key")] + [f.get("api_key") for f in self.cfg.get("fallbacks") or [] if isinstance(f, dict)]:
+        keys = [self.cfg.get("api_key")] + [f.get("api_key") for f in self.cfg.get("fallbacks") or [] if isinstance(f, dict)]
+        keys += [e.get("api_key") for e in self.engines().values()]
+        for key in keys:
             if key:
                 s = s.replace(key, "***")
         return s
 
-    def providers(self) -> list[dict]:
-        """The main engine first, then each backup engine."""
+    def engines(self) -> dict[str, dict]:
+        """The named engines a request may ask for (the `model` field of the request names one)."""
+        raw = self.cfg.get("engines")
+        if not isinstance(raw, dict):
+            return {}
+        return {str(n): e for n, e in raw.items() if isinstance(e, dict) and e.get("base_url") and e.get("model")}
+
+    def engine_list(self) -> list[dict]:
+        """What the phone may learn about them: a name and a description, never keys or addresses."""
+        return [{"name": n, "description": " ".join(str(e.get("description") or "").split())[:300]}
+                for n, e in self.engines().items()]
+
+    def engine_for(self, body: dict) -> str | None:
+        name = body.get("model") if isinstance(body, dict) else None
+        return name if isinstance(name, str) and name in self.engines() else None
+
+    def providers(self, engine: str | None = None) -> list[dict]:
+        """The engines to try, in order: the named one if a request asked for one, then the main engine, then each
+        backup. Each has a `key` that stays the same however the list is built, so a cooldown follows the engine."""
         c = self.cfg
-        out = [{"label": c.get("provider") or "main", "base_url": c["base_url"], "api_key": c.get("api_key", ""), "model": c["model"]}]
+        out = [{"label": c.get("provider") or "main", "base_url": c["base_url"], "api_key": c.get("api_key", ""), "model": c["model"], "key": 0,
+                "local": is_local_engine(c.get("provider") or "", c["base_url"], c.get("local"))}]
         for f in c.get("fallbacks") or []:
             if isinstance(f, dict) and f.get("base_url") and f.get("model"):
                 out.append({"label": f.get("provider") or "backup", "base_url": f["base_url"],
-                            "api_key": f.get("api_key", ""), "model": f["model"]})
+                            "api_key": f.get("api_key", ""), "model": f["model"], "key": len(out),
+                            "local": is_local_engine(f.get("provider") or "", f["base_url"], f.get("local"))})
+        named = self.engines().get(engine) if engine else None
+        if named:
+            out.insert(0, {"label": engine, "base_url": named["base_url"], "api_key": named.get("api_key", ""),
+                           "model": named["model"], "key": "engine:" + engine,
+                           "local": is_local_engine(named.get("provider") or "", named["base_url"], named.get("local"))})
         return out
 
     def build_payload(self, body: dict) -> dict:
@@ -119,16 +151,32 @@ class Gateway:
                               SERVER_ERROR_COOLDOWN)
         return None, (502, "Engine unavailable", "upstream_error", None)
 
-    def call_upstream(self, payload: dict, on_throttle=None, on_fallback=None):
-        """Tries the main engine, then each backup. Returns (response, None) or (None, (status, message, type))."""
-        provs = self.providers()
+    def call_upstream(self, payload: dict, on_throttle=None, on_fallback=None, engine: str | None = None,
+                      private: bool = False, byo: dict | None = None):
+        """Tries the engine a request asked for by name (if any), then the main engine, then each backup.
+        A private request (it carries data from a private tool server) is only ever sent to an engine on this PC.
+        Returns (response, None) or (None, (status, message, type))."""
+        if byo:         # the tester's own key: only that engine, never the owner's key or backups, no waiting
+            if private:
+                return None, (503, "This conversation includes private data from a tool server, so it can't be sent "
+                                   "to an online engine.", "needs_local_engine")
+            resp, err = self._call_one(payload, byo, on_throttle, can_wait=False)
+            return (resp, None) if err is None else (None, err[:3])
+        provs = self.providers(engine)
+        if private:
+            provs = [p for p in provs if p["local"]]
+            if not provs:
+                return None, (503, "This conversation includes private data from a tool server marked private, so only an "
+                                   "engine running on this PC may answer, and none is set up. Add one with: "
+                                   "corepack gateway engine add local --provider local", "needs_local_engine")
         now = time.monotonic()
-        order = [i for i in range(len(provs)) if self.cooling.get(i, 0) <= now]
-        order += [i for i in range(len(provs)) if i not in order]          # last resort: engines that are cooling down
+        order = [p for p in provs if self.cooling.get(p["key"], 0) <= now]
+        order += [p for p in provs if p not in order]                      # last resort: engines that are cooling down
+        first_key = provs[0]["key"]
         first_err = None
-        for pos, i in enumerate(order):
-            prov = provs[i]
-            if i != 0 and on_fallback:
+        for pos, prov in enumerate(order):
+            i = prov["key"]
+            if i != first_key and on_fallback:
                 on_fallback(prov["label"])
             more = pos + 1 < len(order)
             # Sitting out a Retry-After only makes sense with a single engine; with backups, fail over or fail fast.

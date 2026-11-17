@@ -35,6 +35,25 @@ TOOLS = [
 ]
 
 
+RESOURCES = [
+    {"uri": "file:///notes.txt", "name": "notes", "description": "Some notes", "mimeType": "text/plain"},
+    {"uri": "file:///logo.png", "name": "logo", "mimeType": "image/png"},
+    {"uri": "file:///big.txt", "name": "big", "mimeType": "text/plain"},
+]
+PROMPTS = [{"name": "summarize", "description": "Summarize some text",
+            "arguments": [{"name": "text", "description": "what to summarize", "required": True}]}]
+
+
+def read_resource(uri):
+    if uri == "file:///notes.txt":
+        return {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "hello from the notes"}]}
+    if uri == "file:///logo.png":
+        return {"contents": [{"uri": uri, "mimeType": "image/png", "blob": "AAAA"}]}
+    if uri == "file:///big.txt":
+        return {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "y" * 5000}]}
+    return None
+
+
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
@@ -84,7 +103,7 @@ for line in sys.stdin:
     method, rid = msg.get("method"), msg.get("id")
     if method == "initialize":
         time.sleep(float(FLAGS.get("init-delay", "0")))
-        send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": VERSION, "capabilities": {"tools": {"listChanged": True}},
+        send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": VERSION, "capabilities": dict({"tools": {"listChanged": True}}, **({"resources": {}} if "resources" in FLAGS else {}), **({"prompts": {}} if "prompts" in FLAGS else {})),
                                                      "serverInfo": {"name": "fake", "version": "1"}}})
     elif method == "tools/list":
         start = int((msg.get("params") or {}).get("cursor") or 0)
@@ -106,6 +125,18 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "Unknown tool"}})
         else:
             send({"jsonrpc": "2.0", "id": rid, "result": out})
+    elif method == "resources/list":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"resources": RESOURCES}})
+    elif method == "resources/read":
+        out = read_resource((msg.get("params") or {}).get("uri"))
+        send({"jsonrpc": "2.0", "id": rid, **({"result": out} if out else {"error": {"code": -32002, "message": "Resource not found"}})})
+    elif method == "prompts/list":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"prompts": PROMPTS}})
+    elif method == "prompts/get":
+        text = str(((msg.get("params") or {}).get("arguments") or {}).get("text", ""))
+        send({"jsonrpc": "2.0", "id": rid, "result": {"description": "d", "messages": [
+            {"role": "user", "content": {"type": "text", "text": "Please summarize: " + text}},
+            {"role": "assistant", "content": {"type": "image", "data": "AAAA", "mimeType": "image/png"}}]}})
     elif method == "ping":
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
     elif rid is not None:

@@ -1,6 +1,7 @@
 package com.corepack.pet
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
 import android.content.Intent
@@ -15,6 +16,12 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.corepack.pet.agent.ToolConfirmText
+import com.corepack.pet.agent.ToolConfirmer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * A bottom-sheet style chat that opens over whatever app is underneath.
@@ -53,12 +60,16 @@ class ChatActivity : Activity() {
     @Volatile
     private var live: ChatStore.Msg? = null
 
+    @Volatile
+    private var lastToolNote: ChatStore.Msg? = null
+
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun ui(block: () -> Unit) = runOnUiThread { if (!isDestroyed) block() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ChatStore.attach(java.io.File(filesDir, "chat.json"))      // bring back the conversation from before a restart
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -167,13 +178,43 @@ class ChatActivity : Activity() {
         submit(shown, prompt + "\n\n" + ctx)
     }
 
+    /**
+     * Asks before a tool that is not read-only runs on the PC. It is called on the worker thread and waits for your
+     * answer. No answer (the sheet closed, or 90 seconds) counts as no.
+     */
+    private val confirmer = ToolConfirmer { server, tool, arguments ->
+        val allowed = AtomicBoolean(false)
+        val closed = CountDownLatch(1)
+        val shown = AtomicReference<AlertDialog?>(null)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) {
+                closed.countDown()
+            } else {
+                shown.set(
+                    AlertDialog.Builder(this)
+                        .setTitle(ToolConfirmText.title(tool))
+                        .setMessage(ToolConfirmText.body(server, tool, arguments))
+                        .setPositiveButton("Allow once") { _, _ -> allowed.set(true) }
+                        .setNegativeButton("Don't allow", null)
+                        .setOnDismissListener { closed.countDown() }
+                        .show()
+                )
+            }
+        }
+        val answered = closed.await(90, TimeUnit.SECONDS)
+        if (!answered) runOnUiThread { shown.get()?.dismiss() }
+        answered && allowed.get()
+    }
+
     override fun onStart() {
         super.onStart()
         visible = true
+        PetAgent.toolConfirmer = confirmer
     }
 
     override fun onStop() {
         visible = false
+        if (PetAgent.toolConfirmer === confirmer) PetAgent.toolConfirmer = null
         super.onStop()
     }
 
@@ -274,10 +315,18 @@ class ChatActivity : Activity() {
                 ui { unrender(current) }
             }
             val note = ChatStore.add("tool", "used $name")
+            lastToolNote = note
             ui {
                 title.text = "Chat - using $name..."
                 render(note)
             }
+        }
+
+        override fun onToolResult(name: String, ok: Boolean, note: String) {
+            val line = lastToolNote ?: return
+            val result = if (ok) "worked" else if (note.isEmpty()) "failed" else "failed: $note"
+            line.text = "used $name - $result"
+            ui { render(line) }
         }
 
         override fun onToken(text: String) {

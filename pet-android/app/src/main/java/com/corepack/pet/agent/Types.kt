@@ -48,11 +48,17 @@ interface Model {
     fun cancel() {}
 }
 
+/** SAFE: reads or drafts things, changes nothing that matters. ASK: needs the user's approval each time. */
+enum class Risk { SAFE, ASK }
+
 interface Tool {
     val spec: ToolSpec
 
     /** False for fire-and-forget tools (like setting the mood): no extra model round is needed after them. */
     val needsFollowUp: Boolean get() = true
+
+    /** [Risk.ASK] makes the registry ask the user before every run. Read-only tools leave this alone. */
+    val risk: Risk get() = Risk.SAFE
 
     fun run(arguments: Map<String, Any?>): String
 }

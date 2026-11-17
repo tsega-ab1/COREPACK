@@ -1,4 +1,4 @@
-package com.corepack.pet.mochi
+package com.corepack.pet.look
 
 /**
  * A tiny drawing layer. The character is drawn once, against this interface, and the same code runs

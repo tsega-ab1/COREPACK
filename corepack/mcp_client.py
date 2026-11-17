@@ -31,6 +31,7 @@ class StdioMcpClient:
         self.timeout = timeout
         self.name = name
         self.server_info: dict = {}
+        self.capabilities: dict = {}            # what the server said it can do: tools, resources, prompts...
         self.protocol_version = ""
         self.stale = False                      # the server said its tool list changed
         self._proc: subprocess.Popen | None = None
@@ -69,6 +70,7 @@ class StdioMcpClient:
                 raise McpError(f"The server speaks MCP version {version or '?'}, which this gateway does not support")
             self.protocol_version = version
             self.server_info = result.get("serverInfo") or {}
+            self.capabilities = result.get("capabilities") if isinstance(result.get("capabilities"), dict) else {}
             self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         except McpError:
             self.close()
@@ -119,6 +121,31 @@ class StdioMcpClient:
                 break
         self.stale = False
         return tools
+
+    def _paged(self, method: str, key: str, capability: str) -> list[dict]:
+        if capability not in self.capabilities:         # the server never said it has these
+            return []
+        items: list[dict] = []
+        cursor = None
+        for _ in range(50):
+            result = self.request(method, {"cursor": cursor} if cursor else {})
+            items.extend(i for i in result.get(key, []) if isinstance(i, dict))
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        return items
+
+    def list_resources(self) -> list[dict]:
+        return [r for r in self._paged("resources/list", "resources", "resources") if r.get("uri")]
+
+    def list_prompts(self) -> list[dict]:
+        return [p for p in self._paged("prompts/list", "prompts", "prompts") if p.get("name")]
+
+    def read_resource(self, uri: str, timeout: float | None = None) -> dict:
+        return self.request("resources/read", {"uri": uri}, timeout=timeout)
+
+    def get_prompt(self, name: str, arguments: dict, timeout: float | None = None) -> dict:
+        return self.request("prompts/get", {"name": name, "arguments": arguments}, timeout=timeout)
 
     def call_tool(self, name: str, arguments: dict, timeout: float | None = None) -> dict:
         return self.request("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)

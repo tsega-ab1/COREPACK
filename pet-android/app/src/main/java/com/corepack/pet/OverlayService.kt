@@ -27,7 +27,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import com.corepack.pet.agent.Capability
 import com.corepack.pet.agent.ProactiveEngine
-import com.corepack.pet.mochi.MochiRenderer
+import com.corepack.pet.look.PetRenderer
 import kotlin.math.abs
 
 /** Keeps the pet floating over other apps. Drag to move, tap to chat, long-press for the menu. */
@@ -171,7 +171,7 @@ class OverlayService : Service() {
         val dm = resources.displayMetrics
         // The window has the character's own proportions, so nothing is cropped or stretched.
         val width = (Prefs.petWidthDp(this) * dm.density).toInt()
-        val height = (width / MochiRenderer.ASPECT).toInt()
+        val height = (width / PetRenderer.ASPECT).toInt()
         val lp = WindowManager.LayoutParams(
             width, height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -316,7 +316,7 @@ class OverlayService : Service() {
             NOTIF_RESTORE,
             Notification.Builder(this, CHANNEL_HIDDEN)
                 .setSmallIcon(R.drawable.ic_stat_pet)
-                .setLargeIcon(PetNotifications.petFace(com.corepack.pet.mochi.MochiState.SAD))
+                .setLargeIcon(PetNotifications.petFace(com.corepack.pet.look.PetState.SAD))
                 .setContentTitle("Pet removed")
                 .setContentText("Tap to bring it back")
                 .setContentIntent(start)

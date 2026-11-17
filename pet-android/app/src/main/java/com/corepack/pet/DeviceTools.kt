@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.provider.AlarmClock
 import com.corepack.pet.agent.PhoneArgs
+import com.corepack.pet.agent.Risk
 import com.corepack.pet.agent.Tool
 import com.corepack.pet.agent.ToolSpec
 
@@ -85,6 +86,7 @@ class OpenAppTool(private val app: Context) : Tool {
 }
 
 class OpenUrlTool(private val app: Context) : Tool {
+    override val risk: Risk = Risk.ASK     // a link chosen by the model can lead anywhere, so the user sees it first
     override val spec = ToolSpec(
         "open_url",
         "Open a web link (http or https) in the browser.",

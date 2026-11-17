@@ -6,9 +6,9 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
-import com.corepack.pet.mochi.Fill
-import com.corepack.pet.mochi.Gfx
-import com.corepack.pet.mochi.ShapePath
+import com.corepack.pet.look.Fill
+import com.corepack.pet.look.Gfx
+import com.corepack.pet.look.ShapePath
 
 /** Phone backend for the shared drawing layer: the same drawing code runs on Canvas here. */
 class AndroidGfx : Gfx {

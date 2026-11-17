@@ -6,3 +6,6 @@ dist/
 .venv/
 *.gguf
 .corepack/
+deploy/.env
+*.orig
+*.rej

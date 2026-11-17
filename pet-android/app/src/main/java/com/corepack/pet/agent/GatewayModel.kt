@@ -16,6 +16,14 @@ class GatewayModel(
     baseUrl: String,
     private val token: String,
     private val readTimeoutMs: Int = 180_000,
+    /** A named engine on the gateway to answer instead of the main one. Empty means the main engine. */
+    private val engine: String = "",
+    /** The person's own API key, sent for this request only. Empty means the server's shared key answers. */
+    private val userKey: String = "",
+    /** "gemini" or "xai": which engine the person's own key belongs to. */
+    private val userProvider: String = "",
+    /** Optional model name to use with the person's own key. */
+    private val userModel: String = "",
 ) : Model {
     private val base = baseUrl.trim().trimEnd('/')
 
@@ -49,6 +57,11 @@ class GatewayModel(
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
             c.setRequestProperty("Authorization", "Bearer $token")
+            if (userKey.isNotBlank()) {
+                c.setRequestProperty("X-Corepack-Key", userKey.trim())
+                if (userProvider.isNotBlank()) c.setRequestProperty("X-Corepack-Provider", userProvider.trim())
+                if (userModel.isNotBlank()) c.setRequestProperty("X-Corepack-Model", userModel.trim())
+            }
             c.setRequestProperty("Accept", "text/event-stream")
             c.outputStream.use { it.write(buildBody(messages, tools)) }
 
@@ -109,6 +122,7 @@ class GatewayModel(
         val msgs = JSONArray()
         for (m in messages) msgs.put(messageJson(m))
         val body = JSONObject().put("stream", true).put("messages", msgs)
+        if (engine.isNotEmpty()) body.put("model", engine)
         if (tools.isNotEmpty()) {
             val arr = JSONArray()
             for (t in tools) arr.put(toolJson(t))

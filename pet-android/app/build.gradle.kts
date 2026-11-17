@@ -15,8 +15,17 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
+        // Where the app connects, and an optional invite code baked in, are chosen when the APK is built:
+        //   ./gradlew assembleDebug -PgatewayUrl=https://your-server/v1 -PinviteCode=cpt_...
+        val gatewayUrl = (project.findProperty("gatewayUrl") as String?) ?: "http://127.0.0.1:8787/v1"
+        val inviteCode = (project.findProperty("inviteCode") as String?) ?: ""
+        buildConfigField("String", "DEFAULT_GATEWAY_URL", "\"$gatewayUrl\"")
+        buildConfigField("String", "DEFAULT_INVITE", "\"$inviteCode\"")
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -68,7 +68,7 @@ Draft reply.
 
 ## What the pet shows
 
-The pet is a small glossy character called Mochi (see `docs/MOCHI_DESIGN.md`). What the agent is doing
+The pet is the CorePack Pet (see `docs/PET_DESIGN.md`). What the agent is doing
 picks its look:
 
 | Pet is | Looks like |
@@ -99,3 +99,13 @@ to neutral after 5 minutes.
 - Not done yet: calendar, contacts and notifications (they need sensitive permissions), voice in and out,
   sending a photo, more nudges (a morning summary, a check-in after a long silence).
 - Agent tests that need no phone: `pet-android/jvm-tests/run.sh`.
+
+## Online tools
+
+The Tools screen has an "Online tools" switch, off until you turn it on. When it is on, the pet can use the tools the
+gateway hosts (see "Tools (MCP)" in GATEWAY.md), such as web search. The list is fetched when a message is sent and
+reused for 30 seconds. A tool the gateway flags as not read-only is only offered while the chat is open, and the chat
+asks "Allow once" or "Don't allow" before it runs; no answer, or closing the chat, counts as no. The Tools screen lists
+everything the gateway offers, whether or not the switch is on.
+
+To add your own tools to the pet, see TOOLS.md.

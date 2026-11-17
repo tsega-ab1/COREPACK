@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -14,6 +15,17 @@ PRESETS = {
               "needs_key": False},
     "custom": {"label": "Other OpenAI-compatible", "base_url": "", "needs_key": True},
 }
+
+
+def is_local_engine(provider: str, base_url: str, flag=None) -> bool:
+    """True if the engine runs on this PC, so private data may be sent to it. An explicit `local` setting
+    (true or false) wins; otherwise it is local if it is the "local" preset or its address is this machine."""
+    if isinstance(flag, bool):
+        return flag
+    if provider == "local":
+        return True
+    host = urllib.parse.urlparse(base_url or "").hostname or ""
+    return host == "localhost" or host == "::1" or host.startswith("127.")
 
 
 def list_models(base: str, key: str) -> list[str]:

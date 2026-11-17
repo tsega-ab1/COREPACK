@@ -1,6 +1,6 @@
 # CorePack Pet (Android)
 
-A pet (a small glossy character called Mochi) that floats over other apps; tap it to chat. It talks to the COREPACK gateway on your PC over
+A pet (the CorePack Pet) that floats over other apps; tap it to chat. It talks to the COREPACK gateway on your PC over
 the USB cable, and acts as a small agent: it can use tools, remember things about you, and show how
 it feels. See `../docs/PHONE_PET.md` for the overview.
 
@@ -48,8 +48,7 @@ is stored. Small grey notes in the chat ("used set_reminder") show when a tool r
 
 ## The character
 
-Drawn in code from measurements of a design reference: see `../docs/MOCHI_DESIGN.md` for the analysis and
-the attribution note (read it before publishing). The look lives in `app/src/main/java/com/corepack/pet/mochi/`.
+Drawn in code from measurements of a design reference: see `../docs/PET_DESIGN.md` for the analysis. The look lives in `app/src/main/java/com/corepack/pet/look/`.
 
 ## Notes
 

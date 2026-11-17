@@ -1,6 +1,6 @@
-import com.corepack.pet.mochi.Fill
-import com.corepack.pet.mochi.Gfx
-import com.corepack.pet.mochi.ShapePath
+import com.corepack.pet.look.Fill
+import com.corepack.pet.look.Gfx
+import com.corepack.pet.look.ShapePath
 import java.awt.AlphaComposite
 import java.awt.BasicStroke
 import java.awt.Color

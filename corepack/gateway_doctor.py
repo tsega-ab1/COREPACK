@@ -49,8 +49,31 @@ def run_doctor(cfg: dict, port: int) -> list[tuple[str, str, str]]:
             out.append(("warn" if backup_ok else "fail", label, detail + ("  (a backup works, so the demo would still run)" if backup_ok else "")))
         else:
             out.append(("warn", label, detail))
-    for state, name, detail in McpHost(cfg).status():
+    for alias in gw.engines():
+        prov = gw.providers(alias)[0]
+        t0 = time.monotonic()
+        resp, err = gw._call_one(payload, prov, None, can_wait=False)
+        label = f"Engine {alias} ({prov['label']} / {prov['model']})"
+        if err:
+            out.append(("warn", label, gw.redact(err[1])))
+            continue
+        try:
+            with resp:
+                json.loads(resp.read())["choices"][0]
+            out.append(("ok", label, f"replied in {time.monotonic() - t0:.1f}s"))
+        except (ValueError, KeyError, IndexError, TypeError):
+            out.append(("warn", label, "answered, but not in the expected format"))
+    mcp = McpHost(cfg)
+    for state, name, detail in mcp.status():
         out.append((state, f"Tool server {name}", detail))
+    private = sorted(mcp.private_servers())
+    if private:
+        engines = gw.providers() + [gw.providers(a)[0] for a in gw.engines()]
+        if any(p["local"] for p in engines):
+            out.append(("ok", "Private tool servers", ", ".join(private) + ": answered by a local engine only"))
+        else:
+            out.append(("warn", "Private tool servers", ", ".join(private) + ": no local engine is set up, so questions that "
+                                                    "use them cannot be answered. Add one: corepack gateway engine add local --provider local"))
     if len(provs) == 1:
         out.append(("warn", "Backup engine", "none set: a rate limit during the demo would stop it. Add one: corepack gateway fallback add"))
     try:

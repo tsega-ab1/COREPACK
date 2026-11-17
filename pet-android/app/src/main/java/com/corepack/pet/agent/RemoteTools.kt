@@ -25,6 +25,17 @@ interface ToolGateway {
 
     @Throws(IOException::class)
     fun call(name: String, arguments: Map<String, Any?>): RemoteResult
+
+    /** The named engines the gateway offers for handing tasks to. An older gateway has none. */
+    @Throws(IOException::class)
+    fun engines(): List<EngineInfo> = emptyList()
+
+    /** What the tool servers offer to read. An older gateway has none. */
+    @Throws(IOException::class)
+    fun resources(): List<ResourceInfo> = emptyList()
+
+    @Throws(IOException::class)
+    fun readResource(server: String, uri: String): RemoteResult = throw IOException("This gateway cannot read resources")
 }
 
 /** Asks the user whether a tool may run. Blocks until they answer, and must say no if they do not. */
@@ -38,6 +49,10 @@ class RemoteTool(
     private val gateway: ToolGateway,
     private val confirmer: () -> ToolConfirmer?,
 ) : Tool {
+    /** How long to wait before the one retry of a read-only tool. A property so tests do not have to wait. */
+    @Volatile
+    var retryDelayMs: Long = 600
+
     override val spec: ToolSpec = ToolSpec(info.name, info.description, info.parametersJson)
 
     override fun run(arguments: Map<String, Any?>): String {
@@ -53,7 +68,7 @@ class RemoteTool(
             if (!approved) return "The user did not allow this, so it was not run. Do not try again unless they ask."
         }
         return try {
-            val r = gateway.call(info.name, arguments)
+            val r = callWithOneRetry(arguments)
             if (r.ok) r.text else "error: ${r.text}"
         } catch (e: RemoteToolGone) {
             "error: that tool is no longer available"
@@ -61,6 +76,22 @@ class RemoteTool(
             "error: ${e.message ?: "could not reach the gateway"}"
         }
     }
+
+    /**
+     * A tool that only reads is tried once more if the gateway could not be reached or reported a failure on its side
+     * (a Wi-Fi hiccup, a tool server that was restarting). A tool that changes things is never repeated by itself,
+     * and neither is one that answered with an error of its own.
+     */
+    private fun callWithOneRetry(arguments: Map<String, Any?>): RemoteResult =
+        try {
+            gateway.call(info.name, arguments)
+        } catch (e: RemoteToolGone) {
+            throw e
+        } catch (e: IOException) {
+            if (info.needsConfirm) throw e
+            Thread.sleep(retryDelayMs)
+            gateway.call(info.name, arguments)
+        }
 }
 
 /**
@@ -73,6 +104,7 @@ class RemoteToolsModule(
     private val confirmer: () -> ToolConfirmer? = { null },
     private val clock: () -> Long = System::currentTimeMillis,
     private val ttlMs: Long = 30_000,
+    private val modelFor: ((String) -> Model)? = null,
 ) : ToolModule {
     override val capability: Capability? = Capability.REMOTE_TOOLS
     override val promptHint: String =
@@ -109,10 +141,55 @@ class RemoteToolsModule(
         return cached
     }
 
+    private val engineCache = TtlCache(clock, ttlMs, emptyList<EngineInfo>()) { gateway.engines() }
+    private val resourceCache = TtlCache(clock, ttlMs, emptyList<ResourceInfo>()) { gateway.resources() }
+
     override fun tools(): List<Tool> {
         val offered = listing()
         val visible = offered.filter { !it.needsConfirm || confirmer() != null }
         hiddenCount = offered.size - visible.size
-        return visible.map { RemoteTool(it, gateway, confirmer) }
+        val tools = ArrayList<Tool>(visible.map { RemoteTool(it, gateway, confirmer) })
+        if (lastError == null) tools.addAll(helpers())      // no point asking for more if the gateway is not answering
+        return tools
+    }
+
+    /** The tools that are not one server's own: handing a task to another model, and reading resources. */
+    private fun helpers(): List<Tool> {
+        val out = ArrayList<Tool>()
+        val make = modelFor
+        val engines = if (make != null) engineCache.get() else emptyList<EngineInfo>()
+        if (make != null && engines.isNotEmpty()) out.add(DelegateTool(engines, make))
+        val resources = resourceCache.get()
+        if (resources.isNotEmpty()) {
+            out.add(ListResourcesTool(resources))
+            out.add(ReadResourceTool(gateway))
+        }
+        return out
+    }
+}
+
+/** Keeps the last good answer of something fetched from the gateway for a while; a failure keeps the old answer. */
+class TtlCache<T>(private val clock: () -> Long, private val ttlMs: Long, empty: T, private val load: () -> T) {
+    private var value: T = empty
+    private var at = 0L
+    private var have = false
+
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    @Synchronized
+    fun get(): T {
+        val now = clock()
+        if (have && now - at < ttlMs) return value
+        try {
+            value = load()
+            at = now
+            have = true
+            lastError = null
+        } catch (e: IOException) {
+            lastError = e.message ?: "could not reach the gateway"
+        }
+        return value
     }
 }

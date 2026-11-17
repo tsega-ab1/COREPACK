@@ -23,9 +23,19 @@ class AgentSession(private val maxMessages: Int = 40) {
     @Volatile
     private var cancelRequested = false
 
+    @Volatile
+    private var activeTools: List<Tool> = emptyList()
+
     /** Something the pet said by itself. It joins the history at the start of the next message. Never blocks. */
     fun inject(text: String) {
         pendingInjected.add(text)
+    }
+
+    /** Fills an empty history, for example from a chat saved before the app was restarted. Does nothing otherwise. */
+    fun restore(earlier: List<AgentMessage>) {
+        synchronized(history) {
+            if (history.isEmpty()) history.addAll(earlier)
+        }
     }
 
     /** A copy of the history, for tests and for showing it. */
@@ -47,6 +57,7 @@ class AgentSession(private val maxMessages: Int = 40) {
         this.model = model
         this.toolsProvider = tools
         this.loop = null
+        this.activeTools = emptyList()
         this.cancelRequested = false
     }
 
@@ -59,7 +70,9 @@ class AgentSession(private val maxMessages: Int = 40) {
         val provider = toolsProvider
         val armed = model
         if (provider == null || armed == null) throw IllegalStateException("arm() must be called before run()")
-        val agent = AgentLoop(armed, provider())
+        val tools = provider()
+        activeTools = tools
+        val agent = AgentLoop(armed, tools)
         loop = agent
         if (cancelRequested) agent.cancelled = true     // Stop was pressed before the loop existed
         try {
@@ -79,6 +92,7 @@ class AgentSession(private val maxMessages: Int = 40) {
         cancelRequested = true
         loop?.cancelled = true
         model?.cancel()
+        for (t in activeTools) (t as? CancellableTool)?.cancel()     // for example a model the pet handed a task to
     }
 
     /** Call with the history lock held. Keeps user/assistant alternation by folding into the last plain reply. */

@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from corepack import cli, gateway  # noqa: E402
 from corepack.mcp_client import McpError, StdioMcpClient  # noqa: E402
-from corepack.mcp_host import McpHost, UnknownTool, clean_schema, public_name  # noqa: E402
+from corepack.mcp_host import McpHost, UnknownResource, UnknownTool, clean_schema, public_name  # noqa: E402
 
 FAKE = os.path.join(os.path.dirname(__file__), "fake_mcp_server.py")
 TOKEN = "phone-token"
@@ -106,6 +106,24 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(McpError) as cm:
             c.start()
         self.assertIn("definitely-not-installed-xyz", str(cm.exception))
+
+    def test_resources_and_prompts_are_listed_when_the_server_has_them(self):
+        c = self.make("--resources", "--prompts")
+        self.assertEqual([r["uri"] for r in c.list_resources()], ["file:///notes.txt", "file:///logo.png", "file:///big.txt"])
+        self.assertEqual([p["name"] for p in c.list_prompts()], ["summarize"])
+        self.assertEqual(c.read_resource("file:///notes.txt")["contents"][0]["text"], "hello from the notes")
+        self.assertEqual(len(c.get_prompt("summarize", {"text": "abc"})["messages"]), 2)
+
+    def test_a_server_without_them_is_not_even_asked(self):
+        c = self.make()
+        self.assertEqual((c.list_resources(), c.list_prompts()), ([], []))
+        self.assertIn("tools", c.capabilities)
+        self.assertNotIn("resources", c.capabilities)
+
+    def test_an_unknown_resource_is_an_error_with_the_servers_code(self):
+        with self.assertRaises(McpError) as cm:
+            self.make("--resources").read_resource("file:///nope")
+        self.assertEqual(cm.exception.code, -32002)
 
     def test_close_stops_the_process(self):
         c = self.make()
@@ -338,6 +356,54 @@ class HostTests(unittest.TestCase):
             t.join(15)
         self.assertEqual(h._clients, {})
 
+    def test_resources_are_off_until_switched_on(self):
+        h = self.make({"fake": spec("--resources")})
+        self.assertEqual(h.resources(), [])
+        with self.assertRaises(UnknownResource):
+            h.read_resource("fake", "file:///notes.txt")
+
+    def test_resources_can_be_listed_and_read(self):
+        h = self.make({"fake": spec("--resources", resources=True)}, mcp_max_result=300)
+        listed = {r["uri"]: r for r in h.resources()}
+        self.assertEqual(sorted(listed), ["file:///big.txt", "file:///logo.png", "file:///notes.txt"])
+        self.assertEqual((listed["file:///notes.txt"]["server"], listed["file:///notes.txt"]["name"], listed["file:///notes.txt"]["mime_type"]),
+                         ("fake", "notes", "text/plain"))
+        self.assertEqual(h.read_resource("fake", "file:///notes.txt"), {"ok": True, "text": "hello from the notes"})
+        self.assertEqual(h.read_resource("fake", "file:///logo.png")["text"], "[image/png content omitted]")
+        big = h.read_resource("fake", "file:///big.txt")["text"]
+        self.assertTrue(big.startswith("y" * 300) and "4700 more characters" in big, big[-40:])
+
+    def test_only_listed_resources_can_be_read(self):
+        h = self.make({"fake": spec("--resources", resources=True)})
+        with self.assertRaises(UnknownResource):
+            h.read_resource("fake", "file:///etc/passwd")
+        with self.assertRaises(UnknownResource):
+            h.read_resource("nobody", "file:///notes.txt")
+
+    def test_a_server_without_resources_adds_nothing_even_if_switched_on(self):
+        h = self.make({"fake": spec(resources=True)})
+        self.assertEqual(h.resources(), [])
+        self.assertEqual(h.resource_errors, {})
+
+    def test_a_broken_server_is_explained_for_resources_too(self):
+        h = self.make({"ghost": {"command": "definitely-not-installed-xyz", "resources": True, "prompts": True}})
+        self.assertEqual((h.resources(), h.prompts()), ([], []))
+        self.assertIn("not found", h.resource_errors["ghost"])
+        self.assertIn("not found", h.prompt_errors["ghost"])
+
+    def test_prompts_are_off_until_switched_on_and_then_usable(self):
+        off = self.make({"fake": spec("--prompts")})
+        self.assertEqual(off.prompts(), [])
+        with self.assertRaises(UnknownResource):
+            off.get_prompt("fake", "summarize", {})
+        h = self.make({"fake": spec("--prompts", prompts=True)})
+        self.assertEqual(h.prompts(), [{"server": "fake", "name": "summarize", "description": "Summarize some text",
+                                        "arguments": [{"name": "text", "description": "what to summarize", "required": True}]}])
+        out = h.get_prompt("fake", "summarize", {"text": 42})
+        self.assertEqual(out["text"], "user: Please summarize: 42\nassistant: [image content omitted]")
+        with self.assertRaises(UnknownResource):
+            h.get_prompt("fake", "no-such-prompt", {})
+
     def test_status_needs_no_process(self):
         h = self.make({"a": spec(allow=["echo"]), "b": spec(allow=[]), "c": {"command": "definitely-not-installed-xyz", "allow": ["*"]}})
         states = {name: state for state, name, _ in h.status()}
@@ -425,6 +491,53 @@ class HttpTests(unittest.TestCase):
         self.srv.mcp = None                  # tearDown closes again without complaint
 
 
+class ExtrasHttpTests(unittest.TestCase):
+    def setUp(self):
+        cfg = dict(gateway.DEFAULTS, provider="main", base_url="http://127.0.0.1:9", api_key="KEY-SECRET", model="m", token=TOKEN, rpm=0,
+                   mcp_servers={"fake": spec("--resources", "--prompts", allow=[], resources=True, prompts=True),
+                                "plain": spec(allow=[])})
+        self.srv = gateway.make_server(cfg, "127.0.0.1", 0)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.port = self.srv.server_address[1]
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def test_everything_needs_the_token(self):
+        for path in ("/v1/resources", "/v1/prompts"):
+            self.assertEqual(get(self.port, path, token="wrong")[0], 401)
+        self.assertEqual(post(self.port, "/v1/resources/read", {"server": "fake", "uri": "file:///notes.txt"}, token="wrong")[0], 401)
+        self.assertEqual(post(self.port, "/v1/prompts/get", {"server": "fake", "name": "summarize"}, token="wrong")[0], 401)
+
+    def test_resources_are_listed_and_read(self):
+        code, body = get(self.port, "/v1/resources")
+        self.assertEqual(code, 200)
+        self.assertEqual(sorted(r["uri"] for r in body["resources"]), ["file:///big.txt", "file:///logo.png", "file:///notes.txt"])
+        self.assertTrue(all(r["server"] == "fake" for r in body["resources"]), "a server that is not switched on offers none")
+        code, body = post(self.port, "/v1/resources/read", {"server": "fake", "uri": "file:///notes.txt"})
+        self.assertEqual((code, body), (200, {"ok": True, "text": "hello from the notes"}))
+
+    def test_unlisted_or_switched_off_resources_are_not_found(self):
+        for body in ({"server": "fake", "uri": "file:///etc/passwd"}, {"server": "plain", "uri": "file:///notes.txt"}):
+            code, out = post(self.port, "/v1/resources/read", body)
+            self.assertEqual((code, out["error"]["type"]), (404, "unknown_resource"))
+
+    def test_bad_requests_are_rejected(self):
+        self.assertEqual(post(self.port, "/v1/resources/read", None, raw=b"nope")[0], 400)
+        self.assertEqual(post(self.port, "/v1/resources/read", {"server": "fake"})[0], 400)
+        self.assertEqual(post(self.port, "/v1/prompts/get", [1, 2])[0], 400)
+
+    def test_prompts_are_listed_and_used(self):
+        code, body = get(self.port, "/v1/prompts")
+        self.assertEqual((code, [p["name"] for p in body["prompts"]]), (200, ["summarize"]))
+        code, body = post(self.port, "/v1/prompts/get", {"server": "fake", "name": "summarize", "arguments": {"text": "hello"}})
+        self.assertEqual(code, 200)
+        self.assertIn("user: Please summarize: hello", body["text"])
+        code, body = post(self.port, "/v1/prompts/get", {"server": "fake", "name": "nope"})
+        self.assertEqual((code, body["error"]["type"]), (404, "unknown_prompt"))
+
+
 class CommandTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -474,6 +587,26 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(gateway.load_file()["mcp_servers"]["slowpoke"]["startup_timeout"], 120.0)
         self.run_cmd("add", "normal", "--", "prog")
         self.assertNotIn("startup_timeout", gateway.load_file()["mcp_servers"]["normal"])
+
+    def test_resources_and_prompts_can_be_switched_on_and_inspected(self):
+        self.run_cmd("add", "--resources", "--prompts", "--allow", "echo", "fake", "--", sys.executable, FAKE, "--resources", "--prompts")
+        s = gateway.load_file()["mcp_servers"]["fake"]
+        self.assertEqual((s.get("resources"), s.get("prompts")), (True, True))
+        self.assertIn("also: resources, prompts", self.run_cmd("list")[1])
+        code, out = self.run_cmd("resources", "fake")
+        self.assertEqual(code, 0)
+        self.assertIn("file:///notes.txt", out)
+        code, out = self.run_cmd("prompts", "fake")
+        self.assertEqual(code, 0)
+        self.assertIn("summarize", out)
+        self.assertEqual(self.run_cmd("resources", "missing")[0], 1)
+
+    def test_a_server_without_them_says_so(self):
+        self.run_cmd("add", "plain", "--", sys.executable, FAKE)
+        code, out = self.run_cmd("resources", "plain")
+        self.assertEqual(code, 0)
+        self.assertIn("offers no resources", out)
+        self.assertNotIn("resources", gateway.load_file()["mcp_servers"]["plain"])
 
     def test_bad_input_is_refused(self):
         self.assertEqual(self.run_cmd("add", "bad name!", "--", "prog")[0], 1)

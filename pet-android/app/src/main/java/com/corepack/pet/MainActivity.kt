@@ -58,21 +58,53 @@ class MainActivity : Activity() {
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setText(Prefs.token(this@MainActivity))
-            hint = "paste from: corepack gateway token"
+            hint = "invite code (or the token from: corepack gateway token)"
         }
-        status = text("Start the gateway on the PC first: corepack gateway start")
+        val ownKey = EditText(this).apply {
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(Prefs.apiKey(this@MainActivity))
+            hint = "optional: your own Gemini or Grok API key"
+        }
+        val modelName = EditText(this).apply {
+            setSingleLine()
+            setText(Prefs.model(this@MainActivity))
+            hint = "optional: model name for your key"
+        }
+        var provider = Prefs.provider(this)
+        val providerButton = Button(this)
+        fun showProvider() {
+            providerButton.text = "Engine for your key: " + (if (provider == "xai") "xAI Grok" else "Google Gemini") + " (tap to change)"
+        }
+        providerButton.setOnClickListener {
+            provider = if (provider == "xai") "gemini" else "xai"
+            showProvider()
+        }
+        showProvider()
+        status = text(
+            if (Prefs.baseUrl(this).startsWith("https://")) {
+                "Enter your invite code, then tap Save and test connection."
+            } else {
+                "Start the gateway on the PC first: corepack gateway start"
+            }
+        )
 
         col.addView(text("CorePack Pet", 22f))
         col.addView(status)
         col.addView(text("Gateway URL"))
         col.addView(url)
-        col.addView(text("Token"))
+        col.addView(text("Invite code / token"))
         col.addView(token)
+        col.addView(text("Your own API key (optional). Leave it empty to use the shared test key, which has a daily limit. Your key is sent only with your own messages and is never saved on the server."))
+        col.addView(ownKey)
+        col.addView(providerButton)
+        col.addView(modelName)
 
         col.addView(button("Save and test connection") {
             val u = url.text.toString()
             val t = token.text.toString()
             Prefs.save(this, u, t)
+            Prefs.saveEngine(this, provider, ownKey.text.toString(), modelName.text.toString())
             status.text = "Checking..."
             Thread {
                 val result = EngineClient.probe(u, t)

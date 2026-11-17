@@ -13,7 +13,7 @@ import android.os.Build
 import android.widget.Toast
 import com.corepack.pet.agent.Reminder
 import com.corepack.pet.agent.ReminderScheduler
-import com.corepack.pet.mochi.MochiState
+import com.corepack.pet.look.PetState
 
 /**
  * Schedules reminders with the system alarm clock, which fires on the minute even in Doze. From Android 12 that
@@ -90,7 +90,7 @@ object Reminders {
         store.markDone(id)
         val text = "Reminder: ${r.text}"
         PetAgent.injectAssistant(app, text)
-        notify(app, "Hey, it's time", r.text, id.toInt(), MochiState.HAPPY, actions = true)
+        notify(app, "Hey, it's time", r.text, id.toInt(), PetState.HAPPY, actions = true)
         PetEvents.say(text, urgent = true)
     }
 
@@ -103,7 +103,7 @@ object Reminders {
                 scheduler.schedule(r)
             } else {
                 store.markDone(r.id)
-                notify(app, "You missed this one", r.text, r.id.toInt(), MochiState.SAD, actions = false)
+                notify(app, "You missed this one", r.text, r.id.toInt(), PetState.SAD, actions = false)
             }
         }
     }
@@ -138,7 +138,7 @@ object Reminders {
         return Notification.Action.Builder(Icon.createWithResource(app, icon), label, pi).build()
     }
 
-    private fun notify(app: Context, title: String, text: String, id: Int, face: MochiState, actions: Boolean) {
+    private fun notify(app: Context, title: String, text: String, id: Int, face: PetState, actions: Boolean) {
         PetNotifications.ensureChannels(app)
         val nm = app.getSystemService(NotificationManager::class.java)
         val open = PendingIntent.getActivity(

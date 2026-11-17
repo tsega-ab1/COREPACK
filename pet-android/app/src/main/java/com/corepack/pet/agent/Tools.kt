@@ -25,6 +25,7 @@ class RememberTool(private val store: FactStore) : Tool {
 }
 
 class ForgetTool(private val store: FactStore) : Tool {
+    override val risk: Risk = Risk.ASK     // deleting what the pet knows about the user is not undone
     override val spec = ToolSpec(
         "forget",
         "Delete saved facts that contain the given text.",

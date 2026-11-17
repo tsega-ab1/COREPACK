@@ -3,7 +3,7 @@
 #   1. agent unit tests: loop, memory, history trimming, tools
 #   2. assistant tests: reminders, tasks, notes, phone-action checks, weather and Wikipedia parsing, nudges, prompt
 #      (and module tests: the tool registry, and the prompt must match the old builder exactly)
-#   3. Mochi character tests: states, motion timings, cross-fades, renderer sanity
+#   3. CorePack Pet look tests: states, motion timings, cross-fades, renderer sanity
 #   4. end-to-end: agent -> real COREPACK gateway -> a fake Gemini that rejects requests with a
 #      missing thought signature or an empty tool schema
 #
@@ -31,10 +31,10 @@ compile() { local dest="$1"; shift; "$KOTLINC" -cp "$CP" -jvm-target 17 -d "$OUT
 
 if [ "${1:-}" = "preview" ]; then
   echo "== preview"
-  compile preview "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/mochi/*.kt "$HERE/Java2DGfx.kt" "$HERE/MochiPreview.kt"
+  compile preview "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/look/*.kt "$HERE/Java2DGfx.kt" "$HERE/PetPreview.kt"
   DEST="${PREVIEW_DIR:-$OUT/preview-out}"
-  java -Djava.awt.headless=true -cp "$OUT/preview:$CP" MochiPreviewKt "$DEST" frames
-  echo "written to $DEST (video: ffmpeg -framerate 30 -i $DEST/frames/f%05d.png -pix_fmt yuv420p mochi.mp4)"
+  java -Djava.awt.headless=true -cp "$OUT/preview:$CP" PetPreviewKt "$DEST" frames
+  echo "written to $DEST (video: ffmpeg -framerate 30 -i $DEST/frames/f%05d.png -pix_fmt yuv420p pet.mp4)"
   exit 0
 fi
 
@@ -45,7 +45,11 @@ compile modules "$AGENT"/*.kt "$HERE/ModuleTests.kt"
 compile session "$AGENT"/*.kt "$HERE/SessionTests.kt"
 compile paced "$AGENT"/*.kt "$HERE/PacedTests.kt"
 compile remote "$AGENT"/*.kt "$HERE/RemoteToolTests.kt"
-compile mochi "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/mochi/*.kt "$HERE/MochiTests.kt"
+compile confirm "$AGENT"/*.kt "$HERE/ConfirmTextTests.kt"
+compile toolarch "$AGENT"/*.kt "$HERE/ToolArchTests.kt"
+compile delegation "$AGENT"/*.kt "$HERE/DelegationTests.kt"
+compile nudge "$AGENT"/*.kt "$HERE/NudgeTests.kt"
+compile look "$PET/Phase.kt" "$AGENT/Types.kt" "$PET"/look/*.kt "$HERE/PetLookTests.kt"
 compile e2e "$AGENT"/*.kt "$HERE/E2E.kt"
 
 echo "== agent unit tests"
@@ -66,8 +70,23 @@ java -cp "$OUT/paced:$CP" PacedTestsKt
 echo "== online (gateway) tool tests"
 java -cp "$OUT/remote:$CP" RemoteToolTestsKt
 
-echo "== mochi character tests"
-java -cp "$OUT/mochi:$CP" MochiTestsKt
+echo "== approval question tests"
+java -cp "$OUT/confirm:$CP" ConfirmTextTestsKt
+
+echo "== tool architecture tests"
+java -cp "$OUT/toolarch:$CP" ToolArchTestsKt
+
+echo "== delegation, engines and resources tests"
+java -cp "$OUT/delegation:$CP" DelegationTestsKt
+
+echo "== behavior tests (chaining, recovery, approval, reporting, memory)"
+PET_SRC="$PET" java -cp "$OUT/behavior:$CP" BehaviorTestsKt
+
+echo "== nudge tests"
+java -cp "$OUT/nudge:$CP" NudgeTestsKt
+
+echo "== pet look tests"
+java -cp "$OUT/look:$CP" PetLookTestsKt
 
 echo "== end-to-end"
 python3 "$HERE/fake_gemini.py" & PIDS+=($!)

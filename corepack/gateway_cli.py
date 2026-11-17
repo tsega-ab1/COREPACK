@@ -12,6 +12,7 @@ import time
 from . import ui
 from .providers import PRESETS, _pick_models, list_models
 from .gateway_config import file_path, load, load_file, save, validate
+from .hosted import digest
 from .upstream import Gateway
 from .gateway_server import make_server
 from .adb import adb_reverse
@@ -104,29 +105,80 @@ def cmd_fallback(args) -> int:
         save(cfg)
         ui.ok("Backup engines removed")
         return 0
-    prov = args.provider or {"1": "gemini", "2": "xai", "3": "local", "4": "custom"}.get(ui.menu("Backup engine", [
+    item = _engine_from_args(args, "Backup engine", cfg)
+    if item is None:
+        return 1
+    items.append(item)
+    cfg["fallbacks"] = items
+    save(cfg)
+    ui.ok(f"Added backup engine {len(items)}: {item['provider']} / {item['model']}")
+    ui.hint("It is used automatically when the main engine fails or is rate-limited. Check it with: corepack gateway doctor")
+    return 0
+
+
+def _engine_from_args(args, title: str, cfg: dict) -> dict | None:
+    """Asks for (or reads from the options) which engine, address, key and model; None if something is missing.
+    For an engine at the same address as the main one, pressing Enter at the key prompt reuses the main key."""
+    prov = args.provider or {"1": "gemini", "2": "xai", "3": "local", "4": "custom"}.get(ui.menu(title, [
         ("1", "Google Gemini", "another key or model"), ("2", "xAI Grok", "API key or credits"),
         ("3", "Local server", "llama.cpp or Ollama on this PC (works offline)"), ("4", "Other OpenAI-compatible", "any base URL")]))
     if prov not in PRESETS:
         ui.fail("Pick 1-4")
-        return 1
+        return None
     preset = PRESETS[prov]
     base = args.base_url or ui.ask("Base URL", preset["base_url"])
     key = ""
     if preset["needs_key"]:
-        key = os.environ.get(args.api_key_env, "") if args.api_key_env else getpass.getpass("  API key (hidden): ").strip()
+        if args.api_key_env:
+            key = os.environ.get(args.api_key_env, "")
+        else:
+            reuse = bool(cfg.get("api_key")) and base.rstrip("/") == str(cfg.get("base_url", "")).rstrip("/")
+            key = getpass.getpass("  API key (hidden" + ("; Enter reuses the main engine's key" if reuse else "") + "): ").strip()
+            if not key and reuse:
+                key = cfg["api_key"]
         if not key:
             ui.fail("An API key is required for this engine")
-            return 1
+            return None
     model = (args.model or _pick_model(prov, base, key)).strip()
     if not model:
         ui.fail("A model name is required")
+        return None
+    return {"provider": prov, "base_url": base, "api_key": key, "model": model}
+
+
+def cmd_engine(args) -> int:
+    cfg = load_file()
+    engines = cfg.get("engines") if isinstance(cfg.get("engines"), dict) else {}
+    cmd = args.engine_cmd
+    if cmd == "list" or cmd is None:
+        if not engines:
+            ui.info("No named engines. Add one with: corepack gateway engine add NAME")
+        for name, e in engines.items():
+            print(f"   {name}: {e.get('provider', '?')}  {e.get('model', '?')}  key: {'set' if e.get('api_key') else 'none'}"
+                  + (f"   {e['description']}" if e.get("description") else ""))
+        return 0
+    if cmd == "remove":
+        if args.name not in engines:
+            ui.fail(f"No engine called {args.name!r}. See: corepack gateway engine list")
+            return 1
+        del engines[args.name]
+        cfg["engines"] = engines
+        save(cfg)
+        ui.ok(f"Removed engine {args.name}")
+        return 0
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,30}", args.name):
+        ui.fail("The name may use letters, digits and dashes only (up to 30 characters)")
         return 1
-    items.append({"provider": prov, "base_url": base, "api_key": key, "model": model})
-    cfg["fallbacks"] = items
+    item = _engine_from_args(args, "Engine " + args.name, cfg)
+    if item is None:
+        return 1
+    item["description"] = (args.description or "").strip()
+    existed = args.name in engines
+    engines[args.name] = item
+    cfg["engines"] = engines
     save(cfg)
-    ui.ok(f"Added backup engine {len(items)}: {prov} / {model}")
-    ui.hint("It is used automatically when the main engine fails or is rate-limited. Check it with: corepack gateway doctor")
+    ui.ok(("Updated" if existed else "Added") + f" engine {args.name}: {item['provider']} / {item['model']}")
+    ui.hint("The pet can hand tasks to it by name. Restart the gateway for the change to reach the phone.")
     return 0
 
 
@@ -147,7 +199,11 @@ def cmd_mcp(args) -> int:
             shown = "all tools" if "*" in allow else (", ".join(allow) if allow else "none yet (tools stay hidden until you allow them)")
             print(f"   {name}: {s.get('command', '?')} {' '.join(str(a) for a in s.get('args') or [])}".rstrip())
             env = ", ".join((s.get("env") or {}).keys())
-            print(f"      allows: {shown}   confirm: {s.get('confirm', 'auto')}" + (f"   env: {env}" if env else ""))
+            extras = ", ".join(k for k in ("resources", "prompts") if s.get(k))
+            print(f"      allows: {shown}   confirm: {s.get('confirm', 'auto')}" + (f"   env: {env}" if env else "")
+                  + (f"   also: {extras}" if extras else ""))
+            if s.get("private"):
+                print("      PRIVATE: its data is only ever shown to an engine running on this PC")
         return 0
     if cmd == "add":
         if not re.fullmatch(r"[A-Za-z0-9-]{1,30}", args.name):
@@ -172,6 +228,12 @@ def cmd_mcp(args) -> int:
             env[k] = v
         allow = ["*"] if args.allow_all else [t.strip() for t in (args.allow or "").split(",") if t.strip()]
         spec = {"command": words[0], "args": words[1:], "env": env, "allow": allow, "confirm": args.confirm}
+        if args.private:
+            spec["private"] = True
+        if args.resources:
+            spec["resources"] = True
+        if args.prompts:
+            spec["prompts"] = True
         if args.startup_timeout:
             spec["startup_timeout"] = args.startup_timeout
         existed = args.name in servers
@@ -209,6 +271,27 @@ def cmd_mcp(args) -> int:
             return 1
         save(cfg)
         ui.ok(f"{name} now allows: " + ("all tools" if "*" in spec["allow"] else ", ".join(spec["allow"]) or "nothing"))
+        return 0
+    if cmd in ("resources", "prompts"):
+        host = McpHost(cfg)
+        try:
+            ui.info(f"Starting {name}...")
+            items = host.offered(name, cmd)
+        except McpError as e:
+            ui.fail(str(e))
+            return 1
+        finally:
+            host.close()
+        if not items:
+            ui.info(f"{name} offers no {cmd}.")
+            return 0
+        if cmd == "resources":
+            ui.table(["uri", "name", "type"], [[r.get("uri", ""), str(r.get("name", ""))[:30], r.get("mimeType", "")] for r in items])
+        else:
+            ui.table(["prompt", "arguments", "what it does"],
+                     [[p.get("name", ""), ", ".join(a.get("name", "") for a in p.get("arguments") or []),
+                       " ".join(str(p.get("description") or "").split())[:50]] for p in items])
+        ui.hint(f"Switch {cmd} on for this server with: corepack gateway mcp add --{cmd} ... (it replaces the entry, so repeat the other options)")
         return 0
     if cmd == "tools":
         host = McpHost(cfg)
@@ -341,6 +424,97 @@ def cmd_start(args) -> int:
     return 0
 
 
+def _invites_env(invites: dict) -> str:
+    return json.dumps({n: {"sha256": i["sha256"], "rpm": i.get("rpm"), "daily": i.get("daily")} for n, i in invites.items()},
+                      separators=(",", ":"))
+
+
+def cmd_invite(args) -> int:
+    """Invite codes for testers of a hosted gateway."""
+    cfg = load_file()
+    invites = dict(cfg.get("invites")) if isinstance(cfg.get("invites"), dict) else {}
+    sub = args.invite_cmd
+    if sub == "add":
+        name = args.name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", name):
+            ui.fail("Use a short name with letters, digits, dot, dash or underscore")
+            return 1
+        code = "cpt_" + secrets.token_urlsafe(12)
+        invites[name] = {"sha256": digest(code),
+                         "rpm": args.rpm if args.rpm is not None else int(cfg.get("invite_rpm", 6)),
+                         "daily": args.daily if args.daily is not None else int(cfg.get("invite_daily", 30))}
+        cfg["invites"] = invites
+        save(cfg)
+        ui.ok(f"Invite for {name}: {invites[name]['rpm'] or 'unlimited'} requests/min, "
+              f"{invites[name]['daily'] or 'unlimited'} messages/day on the shared key")
+        print(f"\n  {code}\n")
+        ui.hint("This code is shown once (only its hash is saved). Send it to the tester; they paste it in the app.")
+        ui.hint("On a host that has no persistent disk, set COREPACK_INVITES to:  corepack gateway invite export")
+        return 0
+    if sub == "list":
+        if not invites:
+            ui.info("No invites yet. Create one: corepack gateway invite add NAME")
+        for n, i in invites.items():
+            print(f"  {n:<20} {i.get('rpm') or 'unlimited'}/min  {i.get('daily') or 'unlimited'}/day")
+        return 0
+    if sub == "revoke":
+        if args.name not in invites:
+            ui.fail(f"No invite named {args.name}")
+            return 1
+        del invites[args.name]
+        cfg["invites"] = invites
+        save(cfg)
+        ui.ok(f"Revoked {args.name}. On a hosted copy, update COREPACK_INVITES too.")
+        return 0
+    if sub == "export":
+        print(_invites_env(invites))
+        return 0
+    ui.fail("Use: add, list, revoke or export")
+    return 1
+
+
+def cmd_serve(args) -> int:
+    """Run as a public server (for a container or VPS). Settings come from environment variables; no prompts, no adb."""
+    cfg = load()
+    cfg["hosted"] = True
+    prov = cfg.get("provider") or ""
+    if prov in PRESETS and not cfg.get("base_url"):
+        cfg["base_url"] = PRESETS[prov]["base_url"]
+    cfg["max_concurrent"] = cfg.get("max_concurrent") or 8
+    bad = []
+    if not cfg.get("token"):
+        bad.append("COREPACK_TOKEN is not set (the owner token)")
+    if not cfg.get("base_url") or not cfg.get("model"):
+        bad.append("Set COREPACK_PROVIDER (gemini or xai) and COREPACK_MODEL")
+    for b in bad:
+        ui.fail(b)
+    if bad:
+        return 1
+    host = args.host or os.environ.get("HOST") or "0.0.0.0"
+    port = args.port or int(os.environ.get("PORT") or cfg["port"])
+    try:
+        srv = make_server(cfg, host, port, verbose=True)
+    except OSError as e:
+        ui.fail(f"Can't listen on {host}:{port}: {e}")
+        return 1
+    n = len(srv.gw.tenants.table)
+    ui.header("Phone AI gateway (hosted)")
+    ui.ok(f"Engine   {cfg['model']}  via {PRESETS.get(prov, {}).get('label', prov)}")
+    ui.ok(f"Listen   {host}:{port}   (put HTTPS in front of this)")
+    ui.ok(f"Invites  {n}   limits per invite: {cfg['invite_rpm']}/min, {cfg['invite_daily']}/day on the shared key")
+    if not cfg.get("api_key"):
+        ui.warn("No shared key (COREPACK_API_KEY): testers must bring their own key")
+    if not n:
+        ui.warn("No invites (COREPACK_INVITES): only the owner token works")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        srv.server_close()
+    return 0
+
+
 def add_parsers(sub) -> None:
     g = sub.add_parser("gateway", help="AI gateway for the phone overlay app")
     gs = g.add_subparsers(dest="gw_cmd")
@@ -356,6 +530,19 @@ def add_parsers(sub) -> None:
     s.add_argument("--port", type=int)
     s.add_argument("--no-adb", action="store_true", help="don't run adb reverse")
     s.add_argument("--lan", action="store_true", help="also listen on Wi-Fi / hotspot so phones without a cable can connect")
+    sv = gs.add_parser("serve", help="run as a public server for testers (container / VPS; settings from environment variables)")
+    sv.add_argument("--host")
+    sv.add_argument("--port", type=int)
+    iv = gs.add_parser("invite", help="invite codes for testers of a hosted gateway")
+    ivs = iv.add_subparsers(dest="invite_cmd")
+    ia = ivs.add_parser("add", help="create an invite code")
+    ia.add_argument("name")
+    ia.add_argument("--rpm", type=int, help="requests per minute (0 = unlimited)")
+    ia.add_argument("--daily", type=int, help="messages per day on the shared key (0 = unlimited)")
+    ivs.add_parser("list", help="show invites (never the codes)")
+    ir = ivs.add_parser("revoke", help="remove an invite")
+    ir.add_argument("name")
+    ivs.add_parser("export", help="print the COREPACK_INVITES value for a host without a persistent disk")
     t = gs.add_parser("token", help="show or rotate the phone token")
     t.add_argument("--rotate", action="store_true")
     pr = gs.add_parser("pair", help="print one-line pairing codes for the phone app")
@@ -371,6 +558,18 @@ def add_parsers(sub) -> None:
     fa.add_argument("--api-key-env")
     fbs.add_parser("list", help="show backup engines")
     fbs.add_parser("clear", help="remove all backup engines")
+    en = gs.add_parser("engine", help="named engines the pet can hand tasks to (a fast one, a careful one, a local one)")
+    ens = en.add_subparsers(dest="engine_cmd")
+    ea = ens.add_parser("add", help="add or replace a named engine")
+    ea.add_argument("name")
+    ea.add_argument("--provider", choices=list(PRESETS))
+    ea.add_argument("--base-url")
+    ea.add_argument("--model")
+    ea.add_argument("--api-key-env")
+    ea.add_argument("--description", help="what it is good for; the pet reads this to decide when to use it")
+    ens.add_parser("list", help="show named engines")
+    er = ens.add_parser("remove", help="remove a named engine")
+    er.add_argument("name")
     mc = gs.add_parser("mcp", help="tool servers (MCP) that the pet may use")
     mcs = mc.add_subparsers(dest="mcp_cmd")
     ma = mcs.add_parser("add", help="add a tool server:  add [options] NAME -- COMMAND [ARGS...]")
@@ -381,6 +580,10 @@ def add_parsers(sub) -> None:
                     help="how long to wait for the server to start (default 60); raise it on a slow connection")
     ma.add_argument("--confirm", choices=["auto", "always", "never"], default="auto",
                     help="when the phone should ask first: auto = for tools that are not read-only")
+    ma.add_argument("--private", action="store_true",
+                    help="keep this server's data on this PC: once it is used, only a local engine may answer")
+    ma.add_argument("--resources", action="store_true", help="let the phone read the data this server lists (resources)")
+    ma.add_argument("--prompts", action="store_true", help="let the phone use this server's ready-made prompts")
     ma.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
                     help="environment for the server; use KEY='$KEY' to take the value from your shell")
     # not called "cmd": the top-level parser keeps the chosen command under that name
@@ -390,6 +593,9 @@ def add_parsers(sub) -> None:
     mr.add_argument("name")
     mt = mcs.add_parser("tools", help="start a server and show what it offers")
     mt.add_argument("name")
+    for what in ("resources", "prompts"):
+        mx = mcs.add_parser(what, help=f"start a server and show the {what} it offers")
+        mx.add_argument("name")
     mal = mcs.add_parser("allow", help="choose which tools of a server the pet may use")
     mal.add_argument("name")
     mal.add_argument("tools", nargs="*")
@@ -399,7 +605,7 @@ def add_parsers(sub) -> None:
 
 def dispatch(args, parser) -> int:
     fn = {"init": cmd_init, "test": cmd_test, "start": cmd_start, "token": cmd_token, "pair": cmd_pair,
-          "doctor": cmd_doctor, "fallback": cmd_fallback, "mcp": cmd_mcp}.get(args.gw_cmd)
+          "doctor": cmd_doctor, "serve": cmd_serve, "invite": cmd_invite, "fallback": cmd_fallback, "engine": cmd_engine, "mcp": cmd_mcp}.get(args.gw_cmd)
     if not fn:
         parser.parse_args(["gateway", "--help"])
         return 0

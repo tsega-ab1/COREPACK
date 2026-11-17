@@ -7,12 +7,14 @@ import com.corepack.pet.agent.CancelReminderTool
 import com.corepack.pet.agent.Capability
 import com.corepack.pet.agent.CompleteTaskTool
 import com.corepack.pet.agent.FactStore
+import com.corepack.pet.agent.GatewayModel
 import com.corepack.pet.agent.HttpToolGateway
 import com.corepack.pet.agent.ForgetTool
 import com.corepack.pet.agent.ListRemindersTool
 import com.corepack.pet.agent.ListTasksTool
 import com.corepack.pet.agent.MoodTool
 import com.corepack.pet.agent.RememberTool
+import com.corepack.pet.agent.Requirement
 import com.corepack.pet.agent.RemoteToolsModule
 import com.corepack.pet.agent.SaveNoteTool
 import com.corepack.pet.agent.SearchNotesTool
@@ -38,6 +40,7 @@ object PetModules {
         return remote ?: RemoteToolsModule(
             HttpToolGateway({ Prefs.baseUrl(appContext) }, { Prefs.token(appContext) }),
             { PetAgent.toolConfirmer },
+            modelFor = { engine -> GatewayModel(Prefs.baseUrl(appContext), Prefs.token(appContext), 120_000, engine, Prefs.apiKey(appContext), Prefs.provider(appContext), Prefs.model(appContext)) },
         ).also { remote = it }
     }
 
@@ -69,6 +72,7 @@ private class CoreModule(private val app: Context, private val store: FactStore)
 private class RemindersModule(private val app: Context) : ToolModule {
     override val capability: Capability? = Capability.REMINDERS
     override val promptHint: String = BuiltinHints.REMINDERS
+    override val requirements: List<Requirement> = listOf(Requirement.EXACT_ALARMS)
 
     override fun tools(): List<Tool> {
         val reminders = PetStores.reminders(app)

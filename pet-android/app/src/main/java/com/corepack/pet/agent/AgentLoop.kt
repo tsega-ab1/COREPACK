@@ -7,7 +7,7 @@ package com.corepack.pet.agent
 class AgentLoop(
     private val model: Model,
     private val tools: List<Tool>,
-    private val maxRounds: Int = 5,
+    private val maxRounds: Int = 8,
 ) {
     interface Listener : TurnHooks {
         fun onThinking()

@@ -1,4 +1,4 @@
-# Mochi: design analysis and how the pet uses it
+# CorePack Pet: design analysis and how the pet uses it
 
 The pet's look was adapted from six short design clips (720x900, 30 fps, 2,160 frames in total).
 This note records what was measured, how it maps onto the pet, and what is not done.
@@ -36,13 +36,13 @@ Every frame of the Animation clip was tracked (body outline, colour, eye holes).
   Slap squashes the body (about +16% wide, -20% tall) and rings for about 0.5 s.
 
 Colours (body top / bottom / badge) were sampled per state from the Expressions grid; see `Looks` in
-`mochi/Mochi.kt`.
+`look/PetLook.kt`.
 
 ## How the pet uses it
 
 What the agent is doing picks the state; the mood the model sets only colours the calm state.
 
-| Pet is | Mochi state |
+| Pet is | CorePack Pet state |
 |---|---|
 | idle (neutral) | idle |
 | idle, mood happy / sad / curious / sleepy / excited | happy / sad / question / yawn / dancing |
@@ -60,12 +60,12 @@ What the agent is doing picks the state; the mood the model sets only colours th
 
 ## How it is built
 
-- `mochi/Gfx.kt`: a tiny drawing interface. The character is drawn once against it; the phone uses
+- `look/Gfx.kt`: a tiny drawing interface. The character is drawn once against it; the phone uses
   `AndroidGfx` (Canvas) and the desktop preview uses `Java2DGfx`. That is why the preview images
   match what the phone draws.
-- `mochi/Mochi.kt`: states, looks, and `MochiAnimator.pose(state, secondsInState, clock)`, a pure
-  function (same inputs, same pose), plus `MochiPlayer` for cross-fades and one-off expressions.
-- `mochi/MochiRenderer.kt`: draws one pose. About 30 draw calls per frame.
+- `look/PetLook.kt`: states, looks, and `PetAnimator.pose(state, secondsInState, clock)`, a pure
+  function (same inputs, same pose), plus `PetPlayer` for cross-fades and one-off expressions.
+- `look/PetRenderer.kt`: draws one pose. About 30 draw calls per frame.
 - `PetView.kt`: keeps time and hands frames to the renderer.
 
 ## Not done yet
@@ -74,12 +74,3 @@ What the agent is doing picks the state; the mood the model sets only colours th
 - Upload and Slap animations: Slap would suit a tap or poke reaction.
 - The notch/island panel from the Implementation clip.
 - Sound: the reference app has a sound engine; none of it is used.
-
-## Attribution
-
-The clips come from a design presentation of a mascot called Mochi, apparently part of a commercial
-macOS app. Only measurements (proportions, timings, palette, state vocabulary) were taken. All
-drawing and animation code here was written from scratch, and no footage, image or sound is included.
-Because a mascot's look can be protected, check the original's licence or ask its author before
-publishing the pet publicly, or change the character's identity (silhouette, face, palette) to your
-own design; the whole look lives in `mochi/` and is easy to change.

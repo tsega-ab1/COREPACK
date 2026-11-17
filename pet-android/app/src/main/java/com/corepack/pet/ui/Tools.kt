@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,6 +25,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,15 +41,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.corepack.pet.PetStores
+import com.corepack.pet.Prefs
+import com.corepack.pet.PetAgent
+import com.corepack.pet.PetModules
+import com.corepack.pet.Requirements
 import com.corepack.pet.agent.Capability
+import com.corepack.pet.agent.Hue
+import com.corepack.pet.agent.HttpToolGateway
+import com.corepack.pet.agent.RemoteToolInfo
+import java.net.SocketTimeoutException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-private fun tintFor(c: Capability): Tint = when (c) {
-    Capability.REMINDERS -> Tints.Rose
-    Capability.TASKS_NOTES -> Tints.Mint
-    Capability.PHONE_ACTIONS -> Tints.Sky
-    Capability.LOOKUPS -> Tints.Violet
-    Capability.NUDGES -> Tints.Peach
-    Capability.REMOTE_TOOLS -> Tints.Sky
+private fun tintFor(h: Hue): Tint = when (h) {
+    Hue.VIOLET -> Tints.Violet
+    Hue.ROSE -> Tints.Rose
+    Hue.MINT -> Tints.Mint
+    Hue.SKY -> Tints.Sky
+    Hue.PEACH -> Tints.Peach
 }
 
 /** What the pet may do. The model only ever sees the tools that are switched on. */
@@ -54,6 +66,23 @@ private fun tintFor(c: Capability): Tint = when (c) {
 fun ToolsScreen(tick: Int, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var caps by remember(tick) { mutableStateOf(PetStores.capabilities(ctx)) }
+    // What Android has to allow for each capability, straight from the modules.
+    val needs = remember(tick) {
+        PetModules.builtin(ctx, PetAgent.facts(ctx)).mapNotNull { m -> m.capability?.let { it to m.requirements } }.toMap()
+    }
+    var pcTools by remember(tick) { mutableStateOf<List<RemoteToolInfo>?>(null) }
+    var pcStatus by remember(tick) { mutableStateOf<String?>("Asking your PC for its tools") }
+    LaunchedEffect(tick) {
+        val result = withContext(Dispatchers.IO) {
+            runCatching { HttpToolGateway({ Prefs.baseUrl(ctx) }, { Prefs.token(ctx) }).list() }
+        }
+        result.onSuccess {
+            pcTools = it
+            pcStatus = null
+        }.onFailure {
+            pcStatus = if (it is SocketTimeoutException) "Your PC is still starting its tools. Open this screen again in a moment." else it.message ?: "Could not reach your PC"
+        }
+    }
 
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 21.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -65,7 +94,7 @@ fun ToolsScreen(tick: Int, onBack: () -> Unit) {
         ) {
             items(Capability.entries.toList(), key = { it.name }) { cap ->
                 val on = cap in caps
-                val tint = tintFor(cap)
+                val tint = tintFor(cap.hue)
                 Row(
                     Modifier.fillMaxWidth().alpha(if (on) 1f else 0.7f).tinted(tint, RoundedCornerShape(30.dp)).padding(horizontal = 21.dp, vertical = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -73,10 +102,52 @@ fun ToolsScreen(tick: Int, onBack: () -> Unit) {
                     Column(Modifier.weight(1f).padding(end = 13.dp)) {
                         Txt(cap.label, tint.ink, 16.sp, weight = FontWeight.SemiBold)
                         Txt(cap.blurb, tint.ink.copy(alpha = 0.85f), 13.sp, Modifier.padding(top = 2.dp))
+                        for (r in needs[cap].orEmpty()) {
+                            val allowed = remember(tick) { Requirements.isGranted(ctx, r) }
+                            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Txt(if (allowed) "${r.label}: allowed" else "${r.label}: needed", tint.ink, 12.sp, weight = FontWeight.SemiBold)
+                                if (!allowed) {
+                                    Box(
+                                        Modifier.height(40.dp).glass(RoundedCornerShape(20.dp))
+                                            .clickable(onClickLabel = "Grant ${r.label}", role = Role.Button) { ctx.startActivity(Requirements.grantIntent(ctx, r)) }
+                                            .padding(horizontal = 16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) { Txt("Grant", Ink, 12.sp, weight = FontWeight.SemiBold) }
+                                }
+                            }
+                        }
                     }
                     Toggle(on, tint, cap.label) { value ->
                         PetStores.setCapability(ctx, cap, value)
                         caps = PetStores.capabilities(ctx)
+                    }
+                }
+            }
+
+            // What the gateway on the PC offers. The pet can use them once "Online tools" is switched on above.
+            item { Txt("From your PC", Muted, 13.sp, Modifier.padding(start = 4.dp, top = 10.dp), weight = FontWeight.SemiBold) }
+            pcStatus?.let { status -> item { EmptyCard(status) } }
+            val offered = pcTools
+            if (offered != null) {
+                if (offered.isEmpty()) {
+                    item {
+                        EmptyCard(
+                            "Your PC offers no tools yet. To add web search, run this on the PC, then restart the gateway: " +
+                                "corepack gateway mcp add --confirm never --allow search,fetch_content,expand_link web -- uvx duckduckgo-mcp-server"
+                        )
+                    }
+                }
+                val groups = offered.groupBy { it.server }.entries.toList()
+                items(groups, key = { "pc:" + it.key }) { group ->
+                    Column(Modifier.fillMaxWidth().glass(RoundedCornerShape(30.dp)).padding(horizontal = 21.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Txt(group.key, Ink, 15.sp, weight = FontWeight.SemiBold)
+                        for (t in group.value) {
+                            Column {
+                                Txt(t.name.removePrefix(group.key + "__"), Ink, 13.sp, weight = FontWeight.SemiBold)
+                                Txt(t.description, Muted, 13.sp, maxLines = 2)
+                                if (t.needsConfirm) Txt("Asks you in the chat before it runs", Muted, 12.sp)
+                            }
+                        }
                     }
                 }
             }
