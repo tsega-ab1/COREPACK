@@ -1,0 +1,53 @@
+name: Build COREPACK Android APK
+
+on:
+  push:
+    branches:
+      - build/apk
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Enable Gradle wrapper
+        run: chmod +x pet-android/gradlew
+
+      - name: Build debug APK
+        run: >
+          ./gradlew --no-daemon -p pet-android assembleDebug
+          -PgatewayUrl=https://corepack-ju0w.onrender.com/v1
+
+      - name: Prepare checksum
+        run: |
+          cd pet-android/app/build/outputs/apk/debug
+          sha256sum app-debug.apk > app-debug.apk.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: corepack-pet-debug-apk
+          path: |
+            pet-android/app/build/outputs/apk/debug/app-debug.apk
+            pet-android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 7
