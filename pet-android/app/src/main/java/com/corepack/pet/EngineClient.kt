@@ -17,7 +17,7 @@ object EngineClient {
         return try {
             val c = URL(root(base) + "/health").openConnection() as HttpURLConnection
             // A hosted server on a free plan can take several seconds to wake up.
-            val wait = if (hosted(base)) 10_000 else 2000
+            val wait = if (hosted(base)) 75_000 else 2000
             c.connectTimeout = wait
             c.readTimeout = wait
             val ok = c.responseCode == 200
