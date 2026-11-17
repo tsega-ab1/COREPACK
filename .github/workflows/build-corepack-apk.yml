@@ -30,11 +30,13 @@ jobs:
         run: /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
       - name: Enable Gradle wrapper
-        run: chmod +x pet-android/gradlew
+        working-directory: pet-android
+        run: chmod +x gradlew
 
       - name: Build debug APK
+        working-directory: pet-android
         run: >
-          ./gradlew --no-daemon -p pet-android assembleDebug
+          ./gradlew --no-daemon assembleDebug
           -PgatewayUrl=https://corepack-ju0w.onrender.com/v1
 
       - name: Prepare checksum
